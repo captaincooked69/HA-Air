@@ -1,0 +1,43 @@
+# Example: a sections-view dashboard using apple-home-card.
+# Paste into a dashboard's raw config editor (replace entity_ids with your own).
+# A grid column ~= one tile; tiles look best 1-2 columns wide.
+
+title: Home
+views:
+  - title: Home
+    type: sections
+    max_columns: 4
+    sections:
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Living Room
+            heading_style: title
+          - type: custom:apple-home-card
+            entity: light.living_room
+          - type: custom:apple-home-card
+            entity: light.lamp
+            name: Corner Lamp
+          - type: custom:apple-home-card
+            entity: switch.tv
+            color: "#bf5af2"
+          - type: custom:apple-home-card
+            entity: cover.blinds
+
+      - type: grid
+        column_span: 2
+        cards:
+          - type: heading
+            heading: Climate & Security
+            heading_style: title
+          - type: custom:apple-home-card
+            entity: climate.thermostat
+          - type: custom:apple-home-card
+            entity: lock.front_door
+          - type: custom:apple-home-card
+            entity: binary_sensor.front_motion
+            name: Front Motion
+          - type: custom:apple-home-card
+            entity: sensor.outdoor_temperature
+            name: Outside

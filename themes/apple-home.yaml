@@ -1,0 +1,57 @@
+# Apple Home theme — companion to apple-home-card.
+# Install: copy this file into <config>/themes/, add `frontend: themes: !include_dir_merge_named themes`
+# to configuration.yaml, restart, then pick "Apple Home" in your profile.
+
+Apple Home:
+  # ---- Design tokens consumed by apple-home-card --------------------------
+  aha-card-radius: "22px"
+  aha-tile-min-height: "84px"
+  aha-tile-background: "rgba(120, 120, 128, 0.16)"
+  aha-badge-background: "rgba(120, 120, 128, 0.24)"
+  aha-font: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif"
+
+  # ---- Global Home Assistant look -----------------------------------------
+  primary-color: "#0a84ff"
+  accent-color: "#0a84ff"
+  app-header-background-color: "transparent"
+  app-header-text-color: "var(--primary-text-color)"
+  app-header-edit-background-color: "#1c1c1e"
+
+  # Rounded everything
+  ha-card-border-radius: "22px"
+  ha-card-border-width: "0"
+  ha-card-box-shadow: "0 1px 2px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.10)"
+
+  # Typography
+  primary-font-family: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif"
+  paper-font-common-base_-_font-family: "-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif"
+
+  # Spacing between cards in sections / masonry
+  ha-view-sections-column-gap: "12px"
+  ha-view-sections-row-gap: "12px"
+
+  modes:
+    light:
+      primary-background-color: "#f2f2f7"
+      secondary-background-color: "#ffffff"
+      card-background-color: "rgba(255,255,255,0.72)"
+      ha-card-background: "rgba(255,255,255,0.72)"
+      primary-text-color: "#1c1c1e"
+      secondary-text-color: "rgba(60,60,67,0.6)"
+      divider-color: "rgba(60,60,67,0.12)"
+      aha-tile-background: "rgba(120,120,128,0.12)"
+      aha-tile-foreground: "#1c1c1e"
+      aha-tile-subforeground: "rgba(60,60,67,0.6)"
+      aha-badge-background: "rgba(120,120,128,0.20)"
+    dark:
+      primary-background-color: "#000000"
+      secondary-background-color: "#1c1c1e"
+      card-background-color: "rgba(28,28,30,0.72)"
+      ha-card-background: "rgba(28,28,30,0.72)"
+      primary-text-color: "#ffffff"
+      secondary-text-color: "rgba(235,235,245,0.6)"
+      divider-color: "rgba(84,84,88,0.65)"
+      aha-tile-background: "rgba(120,120,128,0.20)"
+      aha-tile-foreground: "#ffffff"
+      aha-tile-subforeground: "rgba(235,235,245,0.6)"
+      aha-badge-background: "rgba(120,120,128,0.28)"
