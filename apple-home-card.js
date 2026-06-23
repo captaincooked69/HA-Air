@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 /* eslint-disable no-console */
 console.info(
@@ -33,17 +33,26 @@ const DOMAIN_BEHAVIOR = {
   input_boolean: { on: (s) => s.state === "on", toggle: ["homeassistant", "toggle"] },
   fan: { on: (s) => s.state === "on", toggle: ["homeassistant", "toggle"] },
   automation: { on: (s) => s.state === "on", toggle: ["homeassistant", "toggle"] },
-  script: { on: (s) => s.state === "on", toggle: ["homeassistant", "toggle"] },
+  // Momentary: tap fires once and the tile pulses, rather than staying "on".
+  script: { on: (s) => s.state === "on", toggle: ["script", "turn_on"], momentary: true },
+  scene: { on: () => false, toggle: ["scene", "turn_on"], momentary: true },
+  button: { on: () => false, toggle: ["button", "press"], momentary: true },
+  input_button: { on: () => false, toggle: ["input_button", "press"], momentary: true },
   lock: {
     on: (s) => s.state === "unlocked",
     toggle: (s) => ["lock", s.state === "locked" ? "unlock" : "lock"],
   },
   cover: {
-    on: (s) => s.state === "open",
-    toggle: (s) => ["cover", s.state === "closed" ? "open_cover" : "close_cover"],
+    on: (s) => ["open", "opening"].includes(s.state),
+    toggle: (s) => ["cover", ["closed", "closing"].includes(s.state) ? "open_cover" : "close_cover"],
+  },
+  vacuum: {
+    on: (s) => ["cleaning", "returning"].includes(s.state),
+    toggle: (s) => ["vacuum", s.state === "cleaning" ? "return_to_base" : "start"],
   },
   climate: { on: (s) => s.state !== "off", toggle: null },
-  media_player: { on: (s) => !["off", "idle", "standby"].includes(s.state), toggle: ["media_player", "media_play_pause"] },
+  media_player: { on: (s) => !["off", "idle", "standby", "unavailable"].includes(s.state), toggle: ["media_player", "media_play_pause"] },
+  alarm_control_panel: { on: (s) => !["disarmed", "unavailable"].includes(s.state), toggle: null },
   binary_sensor: { on: (s) => s.state === "on", toggle: null },
   person: { on: (s) => s.state === "home", toggle: null },
   device_tracker: { on: (s) => s.state === "home", toggle: null },
@@ -57,10 +66,15 @@ const DOMAIN_ACCENT = {
   fan: "#64d2ff",
   lock: "#30d158",
   cover: "#0a84ff",
+  vacuum: "#64d2ff",
   climate: "#ff9f0a",
   media_player: "#bf5af2",
   automation: "#5e5ce6",
-  script: "#5e5ce6",
+  script: "#ff9f0a",
+  scene: "#ff9f0a",
+  button: "#8e8e93",
+  input_button: "#8e8e93",
+  alarm_control_panel: "#ff453a",
   binary_sensor: "#30d158",
   person: "#30d158",
   device_tracker: "#30d158",
@@ -77,6 +91,7 @@ class AppleHomeCard extends LitElement {
       hass: {},
       _config: { state: true },
       _pressed: { state: true },
+      _flash: { state: true },
     };
   }
 
@@ -115,6 +130,7 @@ class AppleHomeCard extends LitElement {
   }
 
   _isOn(stateObj) {
+    if (this._flash) return true; // momentary pulse for scenes/scripts/buttons
     const behavior = DOMAIN_BEHAVIOR[domainOf(stateObj.entity_id)];
     return behavior ? behavior.on(stateObj) : stateObj.state === "on";
   }
@@ -153,8 +169,32 @@ class AppleHomeCard extends LitElement {
       if (b != null) return `${Math.round((b / 255) * 100)}%`;
       return "On";
     }
-    if (domain === "cover") return s === "open" ? "Open" : "Closed";
+    if (domain === "cover") return this._capitalize(s);
     if (domain === "lock") return s === "locked" ? "Locked" : "Unlocked";
+    if (domain === "scene") return "Scene";
+    if (domain === "script") return s === "on" ? "Running…" : "Run";
+    if (domain === "button" || domain === "input_button") return "Press";
+    if (domain === "vacuum") {
+      const map = { cleaning: "Cleaning", returning: "Returning", docked: "Docked", idle: "Idle", paused: "Paused", error: "Error" };
+      return map[s] || this._capitalize(s);
+    }
+    if (domain === "alarm_control_panel") {
+      const map = {
+        disarmed: "Off",
+        armed_home: "Home",
+        armed_away: "Away",
+        armed_night: "Night",
+        triggered: "Triggered",
+      };
+      return map[s] || this._capitalize(s);
+    }
+    if (domain === "media_player") {
+      if (this._isOn(stateObj)) {
+        const t = stateObj.attributes.media_title;
+        return t || this._capitalize(s);
+      }
+      return "Off";
+    }
     if (domain === "climate") {
       const t = stateObj.attributes.current_temperature;
       return t != null ? `${t}°` : this._capitalize(s);
@@ -211,6 +251,14 @@ class AppleHomeCard extends LitElement {
         ? behavior.toggle(stateObj)
         : behavior.toggle;
     this.hass.callService(spec[0], spec[1], { entity_id: stateObj.entity_id });
+
+    // Scenes/scripts/buttons have no "on" state — pulse the tile so the tap
+    // feels acknowledged, the way Apple Home flashes a scene.
+    if (behavior.momentary) {
+      this._flash = true;
+      window.clearTimeout(this._flashTimer);
+      this._flashTimer = window.setTimeout(() => (this._flash = false), 600);
+    }
   }
 
   _runAction(actionConfig) {

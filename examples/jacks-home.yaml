@@ -1,0 +1,479 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Jack's Home — Apple Home–style dashboard (v1, built from your entity registry)
+#
+# HOW TO USE
+#   Dashboard ▸ Edit ▸ ⋮ ▸ Raw configuration editor ▸ paste this whole file.
+#   (Back up your current raw config first.)
+#
+# WHAT'S INCLUDED
+#   Curated, room-grouped tiles for the things you actually touch. Plumbing is
+#   intentionally left out — browser_mod_* sensors, *_debug_*, per-speaker
+#   bass/treble/crossfade config switches, update.*, individual *_browser_width
+#   sensors, BLE distance trackers, etc. Add any back if you want them.
+#
+# ASSUMPTIONS (your areas are unset, so rooms are inferred from names — fix freely)
+#   • media_player.living_room   → Apple TV (has remote + keyboard_focus)
+#   • media_player.living_room_tv → Sony Bravia
+#   • Sonos: arc / kitchen / patio / patio_2 are the real speakers; the _2/_3
+#     duplicates (AirSonos / Music Assistant mirrors) are omitted.
+#   • alarm_control_panel.* are eufy HomeBase guard modes → grouped under Security.
+#   • AC is script-driven (no climate entity) → "Climate" section of scripts.
+# ─────────────────────────────────────────────────────────────────────────────
+
+title: Home
+views:
+  # ===========================================================================
+  # HOME — overview: favourites, scenes, security, status
+  # ===========================================================================
+  - title: Home
+    path: home
+    type: sections
+    max_columns: 4
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Scenes
+            heading_style: title
+            icon: mdi:movie-open
+          - type: custom:apple-home-card
+            entity: scene.bright
+            icon: mdi:white-balance-sunny
+          - type: custom:apple-home-card
+            entity: scene.cosy
+            icon: mdi:sofa
+            color: "#ff9f0a"
+          - type: custom:apple-home-card
+            entity: scene.movie_night
+            icon: mdi:movie
+            color: "#bf5af2"
+          - type: custom:apple-home-card
+            entity: scene.night_night
+            icon: mdi:weather-night
+            color: "#5e5ce6"
+          - type: custom:apple-home-card
+            entity: scene.sleep
+            icon: mdi:bed
+            color: "#5e5ce6"
+          - type: custom:apple-home-card
+            entity: script.goodnight
+            name: Goodnight
+            icon: mdi:moon-waning-crescent
+            color: "#5e5ce6"
+          - type: custom:apple-home-card
+            entity: script.walking_the_dogs
+            name: Walk the Dogs
+            icon: mdi:dog-side
+            color: "#30d158"
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Climate
+            heading_style: title
+            icon: mdi:air-conditioner
+          - type: custom:apple-home-card
+            entity: script.ac_cool
+            name: Cool
+            icon: mdi:snowflake
+            color: "#0a84ff"
+          - type: custom:apple-home-card
+            entity: script.ac_auto_mode
+            name: Auto
+            icon: mdi:autorenew
+          - type: custom:apple-home-card
+            entity: script.ac_wind_up
+            name: Wind Up
+            icon: mdi:fan-plus
+          - type: custom:apple-home-card
+            entity: script.ac_wind_down
+            name: Wind Down
+            icon: mdi:fan-minus
+          - type: custom:apple-home-card
+            entity: script.ac_start_sleep_timer
+            name: Sleep Timer
+            icon: mdi:timer-sand
+            color: "#5e5ce6"
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Security
+            heading_style: title
+            icon: mdi:shield-home
+          - type: custom:apple-home-card
+            entity: alarm_control_panel.home_base
+            name: Home Base
+            icon: mdi:shield
+          - type: custom:apple-home-card
+            entity: alarm_control_panel.living_room
+            name: Living Room
+            icon: mdi:cctv
+          - type: custom:apple-home-card
+            entity: alarm_control_panel.backyard
+            name: Backyard
+            icon: mdi:cctv
+          - type: custom:apple-home-card
+            entity: binary_sensor.doorbell_ringing
+            name: Doorbell
+            icon: mdi:bell
+            color: "#0a84ff"
+          - type: custom:apple-home-card
+            entity: binary_sensor.doorbell_person_detected
+            name: At Door
+            icon: mdi:account
+          - type: custom:apple-home-card
+            entity: cover.garagedoor
+            name: Garage Door
+            icon: mdi:garage
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Status
+            heading_style: title
+            icon: mdi:home-analytics
+          - type: custom:apple-home-card
+            entity: person.jack
+            name: Jack
+            icon: mdi:account
+          - type: custom:apple-home-card
+            entity: weather.forecast_home
+            name: Weather
+          - type: custom:apple-home-card
+            entity: sensor.raxe300_gateway_download_speed
+            name: Download
+            icon: mdi:download
+            color: "#0a84ff"
+          - type: custom:apple-home-card
+            entity: sensor.jacks_iphone_2_battery_level
+            name: iPhone
+            icon: mdi:cellphone
+            color: "#30d158"
+
+  # ===========================================================================
+  # ROOMS
+  # ===========================================================================
+  - title: Rooms
+    path: rooms
+    type: sections
+    max_columns: 4
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Living Room
+            heading_style: title
+            icon: mdi:sofa
+          - type: custom:apple-home-card
+            entity: light.living_room_1
+            name: Ceiling
+          - type: custom:apple-home-card
+            entity: light.living_room_lamp
+            name: Lamp
+          - type: custom:apple-home-card
+            entity: light.canvas_281d
+            name: Nanoleaf
+            color: "#bf5af2"
+          - type: custom:apple-home-card
+            entity: switch.christmas_tree
+            name: Christmas Tree
+            icon: mdi:pine-tree
+            color: "#30d158"
+          - type: custom:apple-home-card
+            entity: media_player.arc
+            name: Sonos Arc
+            icon: mdi:soundbar
+          - type: custom:apple-home-card
+            entity: media_player.living_room_tv
+            name: TV
+            icon: mdi:television
+          - type: custom:apple-home-card
+            entity: media_player.living_room
+            name: Apple TV
+            icon: mdi:apple
+          - type: custom:apple-home-card
+            entity: binary_sensor.living_room_motion_detected
+            name: Motion
+            icon: mdi:motion-sensor
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Bedroom
+            heading_style: title
+            icon: mdi:bed
+          - type: custom:apple-home-card
+            entity: light.bedroom
+            name: Lights
+          - type: custom:apple-home-card
+            entity: scene.bedroom_bright
+            name: Bright
+            icon: mdi:white-balance-sunny
+          - type: custom:apple-home-card
+            entity: scene.bedroom_dim
+            name: Dim
+            icon: mdi:weather-night
+            color: "#5e5ce6"
+          - type: custom:apple-home-card
+            entity: media_player.bedroom_home_assistant_voice_0a95d7
+            name: Speaker
+            icon: mdi:speaker
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Kitchen
+            heading_style: title
+            icon: mdi:fridge
+          - type: custom:apple-home-card
+            entity: media_player.kitchen
+            name: Sonos
+            icon: mdi:speaker
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Bathroom & Dressing
+            heading_style: title
+            icon: mdi:shower
+          - type: custom:apple-home-card
+            entity: light.bathroom
+            name: Bathroom
+          - type: custom:apple-home-card
+            entity: light.dressing_room
+            name: Dressing Room
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Hallway & Stairs
+            heading_style: title
+            icon: mdi:stairs
+          - type: custom:apple-home-card
+            entity: light.hallway
+            name: Hallway
+          - type: custom:apple-home-card
+            entity: binary_sensor.hallway
+            name: Hall Motion
+            icon: mdi:motion-sensor
+          - type: custom:apple-home-card
+            entity: light.stairs
+            name: Stairs
+          - type: custom:apple-home-card
+            entity: binary_sensor.stairs
+            name: Stairs Motion
+            icon: mdi:motion-sensor
+          - type: custom:apple-home-card
+            entity: binary_sensor.sliding_door
+            name: Sliding Door
+            icon: mdi:door-sliding
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Garage
+            heading_style: title
+            icon: mdi:garage
+          - type: custom:apple-home-card
+            entity: light.garage
+            name: Light
+          - type: custom:apple-home-card
+            entity: cover.garagedoor
+            name: Door
+            icon: mdi:garage
+          - type: custom:apple-home-card
+            entity: binary_sensor.garage_door
+            name: Door State
+            icon: mdi:garage-alert
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Office & 3D Printing
+            heading_style: title
+            icon: mdi:printer-3d
+          - type: custom:apple-home-card
+            entity: light.3d_printing_lights
+            name: Lights
+          - type: custom:apple-home-card
+            entity: switch.prusa_core_one
+            name: Printer Power
+            icon: mdi:power
+          - type: custom:apple-home-card
+            entity: sensor.prusa_core_one
+            name: Printer
+            icon: mdi:printer-3d-nozzle
+          - type: custom:apple-home-card
+            entity: sensor.prusa_core_one_progress
+            name: Progress
+            icon: mdi:progress-helper
+            color: "#ff9f0a"
+          - type: custom:apple-home-card
+            entity: binary_sensor.office_door
+            name: Door
+            icon: mdi:door
+          - type: custom:apple-home-card
+            entity: sensor.3d_printing_sensor_temperature
+            name: Temp
+            icon: mdi:thermometer
+            color: "#ff9f0a"
+          - type: custom:apple-home-card
+            entity: sensor.3d_printing_sensor_voc_index
+            name: Air VOC
+            icon: mdi:air-filter
+            color: "#30d158"
+          - type: custom:apple-home-card
+            entity: sensor.3d_printing_sensor_current_pm2_5
+            name: PM2.5
+            icon: mdi:blur
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Patio
+            heading_style: title
+            icon: mdi:flower
+          - type: custom:apple-home-card
+            entity: media_player.patio
+            name: Sonos
+            icon: mdi:speaker
+          - type: custom:apple-home-card
+            entity: media_player.patio_2
+            name: Beam
+            icon: mdi:soundbar
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Backyard
+            heading_style: title
+            icon: mdi:tree
+          - type: custom:apple-home-card
+            entity: switch.backyard_light
+            name: Light
+          - type: custom:apple-home-card
+            entity: binary_sensor.backyard_motion_detected
+            name: Motion
+            icon: mdi:motion-sensor
+          - type: custom:apple-home-card
+            entity: binary_sensor.backyard_person_detected
+            name: Person
+            icon: mdi:account
+
+  # ===========================================================================
+  # CAMERAS — native picture tiles (live thumbnails), themed by Apple Home
+  # ===========================================================================
+  - title: Cameras
+    path: cameras
+    type: sections
+    max_columns: 3
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Cameras
+            heading_style: title
+            icon: mdi:cctv
+          - type: picture-entity
+            entity: camera.doorbell
+            name: Doorbell
+            camera_view: auto
+          - type: picture-entity
+            entity: camera.living_room
+            name: Living Room
+            camera_view: auto
+          - type: picture-entity
+            entity: camera.backyard
+            name: Backyard
+            camera_view: auto
+          - type: picture-entity
+            entity: camera.prusa_core_one_preview
+            name: 3D Printer
+            camera_view: auto
+
+  # ===========================================================================
+  # HOUSE — vacuum, sensors, network
+  # ===========================================================================
+  - title: House
+    path: house
+    type: sections
+    max_columns: 4
+    sections:
+      - type: grid
+        cards:
+          - type: heading
+            heading: Rocky (Vacuum)
+            heading_style: title
+            icon: mdi:robot-vacuum
+          - type: custom:apple-home-card
+            entity: vacuum.rocky
+            name: Rocky
+            icon: mdi:robot-vacuum
+          - type: custom:apple-home-card
+            entity: button.living_room_rocky_full_cleaning
+            name: Full Clean
+            icon: mdi:broom
+            color: "#64d2ff"
+          - type: custom:apple-home-card
+            entity: sensor.rocky_battery
+            name: Battery
+            icon: mdi:battery
+            color: "#30d158"
+          - type: custom:apple-home-card
+            entity: sensor.rocky_status
+            name: Status
+            icon: mdi:information
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Network
+            heading_style: title
+            icon: mdi:wifi
+          - type: custom:apple-home-card
+            entity: sensor.raxe300_gateway_download_speed
+            name: Download
+            icon: mdi:download
+            color: "#0a84ff"
+          - type: custom:apple-home-card
+            entity: sensor.raxe300_gateway_upload_speed
+            name: Upload
+            icon: mdi:upload
+            color: "#bf5af2"
+          - type: custom:apple-home-card
+            entity: binary_sensor.raxe300_gateway_wan_status
+            name: Internet
+            icon: mdi:web
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Lists
+            heading_style: title
+            icon: mdi:format-list-checks
+          - type: todo-list
+            entity: todo.shopping_list
+
+# ─────────────────────────────────────────────────────────────────────────────
+# UNASSIGNED LIGHTS
+#   You have ~15 lights with UUID names (light.5d34e3af_…, light.027d335e_…)
+#   and no friendly names/areas, so I couldn't place them. Best fix: in HA go to
+#   Settings ▸ Devices, give each a name + area. Until then, drop this card on the
+#   Rooms view to surface every light not already shown (needs auto-entities,
+#   which you already have installed):
+#
+#   - type: custom:auto-entities
+#     card:
+#       type: grid
+#     card_param: cards
+#     filter:
+#       include:
+#         - domain: light
+#           options:
+#             type: custom:apple-home-card
+#       exclude:
+#         - entity_id: light.browser_mod_*
+#         - entity_id: "*_led_ring"
+#         - entity_id: "*_screen"
+# ─────────────────────────────────────────────────────────────────────────────
