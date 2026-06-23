@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 
 /* eslint-disable no-console */
 console.info(
@@ -85,6 +85,30 @@ function domainOf(entityId) {
   return entityId ? entityId.split(".")[0] : "";
 }
 
+// Shared "is this entity active?" using the same rules as the tile.
+function isEntityOn(stateObj) {
+  if (!stateObj) return false;
+  const b = DOMAIN_BEHAVIOR[domainOf(stateObj.entity_id)];
+  return b ? b.on(stateObj) : stateObj.state === "on";
+}
+
+// Open the Apple Home detail sheet for an entity. Returns the element so the
+// caller can keep feeding it fresh `hass`.
+function createSheet(hass, entityId, accent, onClosed) {
+  const sheet = document.createElement("apple-home-sheet");
+  sheet.hass = hass;
+  sheet.entityId = entityId;
+  sheet.accent = accent;
+  if (onClosed) sheet.addEventListener("sheet-closed", onClosed);
+  document.body.appendChild(sheet);
+  requestAnimationFrame(() => sheet.show());
+  return sheet;
+}
+
+// A CSSResult so it can be interpolated into other css`` blocks.
+const FONT_STACK_CSS = css`-apple-system, BlinkMacSystemFont, "SF Pro Display",
+  "Segoe UI", Roboto, sans-serif`;
+
 class AppleHomeCard extends LitElement {
   static get properties() {
     return {
@@ -131,20 +155,21 @@ class AppleHomeCard extends LitElement {
 
   _openControls() {
     if (this._sheet) return;
-    const sheet = document.createElement("apple-home-sheet");
-    sheet.hass = this.hass;
-    sheet.entityId = this._config.entity;
-    sheet.accent = this._accent();
-    sheet.addEventListener("sheet-closed", () => {
-      this._sheet = undefined;
-    });
-    document.body.appendChild(sheet);
-    this._sheet = sheet;
-    requestAnimationFrame(() => sheet.show());
+    this._sheet = createSheet(
+      this.hass,
+      this._config.entity,
+      this._accent(),
+      () => (this._sheet = undefined)
+    );
   }
 
   getCardSize() {
     return 1;
+  }
+
+  // Sections view: aim for a square-ish accessory tile.
+  getGridOptions() {
+    return { columns: 3, rows: 2, min_columns: 2, min_rows: 2 };
   }
 
   // --- Helpers -------------------------------------------------------------
@@ -1114,6 +1139,432 @@ class AppleHomeSheet extends LitElement {
 
 customElements.define("apple-home-sheet", AppleHomeSheet);
 
+// ===========================================================================
+// Wide media tile — artwork background + inline transport, à la Apple Home.
+// ===========================================================================
+
+class AppleHomeMediaCard extends LitElement {
+  static get properties() {
+    return { hass: {}, _config: { state: true }, _pressed: { state: true } };
+  }
+
+  static getStubConfig(hass) {
+    const mp = Object.keys(hass.states).find((e) => e.startsWith("media_player."));
+    return { entity: mp || "" };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error("You must define a media_player entity");
+    this._config = config;
+  }
+
+  getCardSize() {
+    return 2;
+  }
+
+  getGridOptions() {
+    return { columns: 6, rows: 2, min_columns: 4, min_rows: 2 };
+  }
+
+  updated(changed) {
+    if (changed.has("hass") && this._sheet && this.hass) this._sheet.hass = this.hass;
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._sheet) this._sheet.close();
+  }
+
+  get _stateObj() {
+    return this.hass ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  _svc(service) {
+    this.hass.callService("media_player", service, {
+      entity_id: this._config.entity,
+    });
+  }
+
+  _openSheet() {
+    if (this._sheet) return;
+    this._sheet = createSheet(
+      this.hass,
+      this._config.entity,
+      "#bf5af2",
+      () => (this._sheet = undefined)
+    );
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const s = this._stateObj;
+    if (!s) {
+      return html`<ha-card><div class="tile off"><div class="info">
+        <span class="title">${this._config.entity}</span>
+        <span class="sub">Not found</span></div></div></ha-card>`;
+    }
+    const a = s.attributes;
+    const playing = s.state === "playing";
+    const active = !["off", "idle", "standby", "unavailable"].includes(s.state);
+    const art = a.entity_picture;
+    const name = this._config.name || a.friendly_name || this._config.entity;
+
+    return html`
+      <ha-card>
+        <div
+          class="tile ${active ? "on" : "off"}"
+          ?data-pressed=${this._pressed}
+          style=${art && active ? `--art:url('${art}')` : ""}
+          @pointerdown=${() => (this._pressed = true)}
+          @pointerup=${() => (this._pressed = false)}
+          @pointerleave=${() => (this._pressed = false)}
+          @click=${this._openSheet}
+        >
+          ${art && active ? html`<div class="art"></div><div class="scrim"></div>` : ""}
+          <div class="content">
+            <div class="top">
+              <div class="badge">
+                <ha-state-icon .hass=${this.hass} .stateObj=${s}></ha-state-icon>
+              </div>
+              <div class="labels">
+                <span class="title">${active ? a.media_title || name : name}</span>
+                <span class="sub">${active ? a.media_artist || a.app_name || "" : "Not playing"}</span>
+              </div>
+            </div>
+            <div class="transport" @click=${(e) => e.stopPropagation()}>
+              <button @click=${() => this._svc("media_previous_track")}>
+                <ha-icon icon="mdi:skip-previous"></ha-icon>
+              </button>
+              <button class="primary" @click=${() => this._svc("media_play_pause")}>
+                <ha-icon icon=${playing ? "mdi:pause" : "mdi:play"}></ha-icon>
+              </button>
+              <button @click=${() => this._svc("media_next_track")}>
+                <ha-icon icon="mdi:skip-next"></ha-icon>
+              </button>
+            </div>
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
+      .tile {
+        position: relative; height: 100%; min-height: 96px;
+        border-radius: 22px; overflow: hidden; cursor: pointer;
+        background: rgba(120, 120, 128, 0.16);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.1);
+        transition: transform 0.28s cubic-bezier(0.2,0.9,0.3,1.2);
+        font-family: ${FONT_STACK_CSS};
+      }
+      .tile[data-pressed] { transform: scale(0.97); }
+      .art {
+        position: absolute; inset: 0; background-image: var(--art);
+        background-size: cover; background-position: center;
+      }
+      .scrim {
+        position: absolute; inset: 0;
+        background: linear-gradient(180deg, rgba(0,0,0,0.15), rgba(0,0,0,0.65));
+      }
+      .content {
+        position: relative; height: 100%; box-sizing: border-box;
+        padding: 14px 16px; display: flex; flex-direction: column;
+        justify-content: space-between; gap: 8px;
+      }
+      .top { display: flex; align-items: center; gap: 12px; min-width: 0; }
+      .badge {
+        width: 38px; height: 38px; border-radius: 50%; flex: none;
+        display: grid; place-items: center; --mdc-icon-size: 22px;
+        background: rgba(255,255,255,0.92); color: #1c1c1e;
+      }
+      .tile.off .badge { background: rgba(120,120,128,0.28); color: var(--primary-text-color); }
+      .labels { display: flex; flex-direction: column; min-width: 0; }
+      .title {
+        font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        color: var(--primary-text-color);
+      }
+      .sub {
+        font-size: 13px; font-weight: 500; color: var(--secondary-text-color);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .tile.on .art ~ .content .title, .tile.on .scrim ~ .content .title,
+      .tile.on .content .title { color: #fff; }
+      .tile.on .content .sub { color: rgba(255,255,255,0.75); }
+      .transport {
+        display: flex; align-items: center; gap: 18px; --mdc-icon-size: 24px;
+      }
+      .transport button {
+        background: none; border: none; padding: 0; cursor: pointer;
+        color: var(--primary-text-color); display: grid; place-items: center;
+      }
+      .tile.on .transport button { color: #fff; }
+      .transport button.primary { --mdc-icon-size: 32px; }
+    `;
+  }
+}
+
+customElements.define("apple-home-media-card", AppleHomeMediaCard);
+
+// ===========================================================================
+// Thermostat tile — current + target temperature with inline +/-.
+// ===========================================================================
+
+class AppleHomeClimateCard extends LitElement {
+  static get properties() {
+    return { hass: {}, _config: { state: true } };
+  }
+
+  static getStubConfig(hass) {
+    const c = Object.keys(hass.states).find((e) => e.startsWith("climate."));
+    return { entity: c || "" };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error("You must define a climate entity");
+    this._config = config;
+  }
+
+  getCardSize() {
+    return 2;
+  }
+
+  getGridOptions() {
+    return { columns: 3, rows: 2, min_columns: 2, min_rows: 2 };
+  }
+
+  updated(changed) {
+    if (changed.has("hass") && this._sheet && this.hass) this._sheet.hass = this.hass;
+  }
+
+  get _stateObj() {
+    return this.hass ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  _bump(delta) {
+    const s = this._stateObj;
+    const step = s.attributes.target_temp_step || 0.5;
+    const t = s.attributes.temperature;
+    if (t == null) return;
+    this.hass.callService("climate", "set_temperature", {
+      entity_id: this._config.entity,
+      temperature: Math.round((t + delta * step) * 10) / 10,
+    });
+  }
+
+  _openSheet() {
+    if (this._sheet) return;
+    this._sheet = createSheet(this.hass, this._config.entity, "#ff9f0a", () => (this._sheet = undefined));
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const s = this._stateObj;
+    if (!s) return html`<ha-card><div class="tile">Not found</div></ha-card>`;
+    const a = s.attributes;
+    const on = s.state !== "off";
+    const accent = on ? this._config.color || "#ff9f0a" : "transparent";
+    const name = this._config.name || a.friendly_name || this._config.entity;
+
+    return html`
+      <ha-card style="--accent:${accent}">
+        <div class="tile ${on ? "on" : "off"}">
+          <div class="head" @click=${this._openSheet}>
+            <div class="badge"><ha-state-icon .hass=${this.hass} .stateObj=${s}></ha-state-icon></div>
+            <div class="labels">
+              <span class="name">${name}</span>
+              <span class="sub">${a.current_temperature != null ? `Now ${a.current_temperature}°` : this._cap(s.state)}</span>
+            </div>
+          </div>
+          <div class="dial">
+            <button @click=${() => this._bump(-1)} ?disabled=${!on}><ha-icon icon="mdi:minus"></ha-icon></button>
+            <span class="target">${a.temperature != null ? `${a.temperature}°` : "—"}</span>
+            <button @click=${() => this._bump(1)} ?disabled=${!on}><ha-icon icon="mdi:plus"></ha-icon></button>
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  _cap(s) {
+    return typeof s === "string" ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  }
+
+  static get styles() {
+    return css`
+      ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
+      .tile {
+        position: relative; height: 100%; min-height: 96px; box-sizing: border-box;
+        border-radius: 22px; padding: 14px 16px; cursor: default;
+        display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+        background: rgba(120,120,128,0.16);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.1);
+        font-family: ${FONT_STACK_CSS};
+      }
+      .tile.on { background: var(--accent); }
+      .head { display: flex; align-items: center; gap: 10px; cursor: pointer; min-width: 0; }
+      .badge {
+        width: 34px; height: 34px; border-radius: 50%; flex: none;
+        display: grid; place-items: center; --mdc-icon-size: 20px;
+        background: rgba(120,120,128,0.28); color: var(--primary-text-color);
+      }
+      .tile.on .badge { background: rgba(255,255,255,0.92); color: #1c1c1e; }
+      .labels { display: flex; flex-direction: column; min-width: 0; }
+      .name {
+        font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
+        color: var(--primary-text-color);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .sub { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); }
+      .tile.on .name, .tile.on .sub { color: #1c1c1e; }
+      .dial { display: flex; align-items: center; justify-content: space-between; }
+      .dial button {
+        width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer;
+        background: rgba(120,120,128,0.28); color: var(--primary-text-color);
+        display: grid; place-items: center; --mdc-icon-size: 20px;
+      }
+      .tile.on .dial button { background: rgba(255,255,255,0.35); color: #1c1c1e; }
+      .dial button[disabled] { opacity: 0.4; cursor: default; }
+      .target { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; color: var(--primary-text-color); }
+      .tile.on .target { color: #1c1c1e; }
+    `;
+  }
+}
+
+customElements.define("apple-home-climate-card", AppleHomeClimateCard);
+
+// ===========================================================================
+// Area / group tile — summarises a room: "2 of 3 on", taps toggle the group.
+// ===========================================================================
+
+class AppleHomeAreaCard extends LitElement {
+  static get properties() {
+    return { hass: {}, _config: { state: true }, _pressed: { state: true } };
+  }
+
+  static getStubConfig() {
+    return { name: "Room", icon: "mdi:sofa", entities: [] };
+  }
+
+  setConfig(config) {
+    if (!config.entities || !config.entities.length) {
+      throw new Error("You must define a list of entities");
+    }
+    this._config = { tap_action: "toggle", ...config };
+  }
+
+  getCardSize() {
+    return 1;
+  }
+
+  getGridOptions() {
+    return { columns: 3, rows: 2, min_columns: 2, min_rows: 2 };
+  }
+
+  get _states() {
+    return (this._config.entities || [])
+      .map((e) => this.hass.states[e])
+      .filter(Boolean);
+  }
+
+  _onCount() {
+    return this._states.filter(isEntityOn).length;
+  }
+
+  _summary() {
+    const total = this._states.length;
+    const on = this._onCount();
+    if (total === 0) return "—";
+    if (on === 0) return "All off";
+    if (on === total) return total === 1 ? "On" : "All on";
+    return `${on} of ${total} on`;
+  }
+
+  _tap() {
+    if (this._config.navigation_path) {
+      history.pushState(null, "", this._config.navigation_path);
+      const e = new Event("location-changed", { bubbles: true, composed: true });
+      e.detail = { replace: false };
+      this.dispatchEvent(e);
+      return;
+    }
+    // Toggle the group: if anything is on, turn all off; else turn all on.
+    const anyOn = this._onCount() > 0;
+    const haptic = new Event("haptic", { bubbles: true, composed: true });
+    haptic.detail = "light";
+    this.dispatchEvent(haptic);
+    this.hass.callService("homeassistant", anyOn ? "turn_off" : "turn_on", {
+      entity_id: this._config.entities,
+    });
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const on = this._onCount() > 0;
+    const accent = this._config.color || "#ffd60a";
+    return html`
+      <ha-card style="--accent:${accent}">
+        <div
+          class="tile ${on ? "on" : "off"}"
+          ?data-pressed=${this._pressed}
+          @pointerdown=${() => (this._pressed = true)}
+          @pointerup=${() => (this._pressed = false)}
+          @pointerleave=${() => (this._pressed = false)}
+          @click=${this._tap}
+        >
+          <div class="badge"><ha-icon icon=${this._config.icon || "mdi:home"}></ha-icon></div>
+          <div class="info">
+            <span class="name">${this._config.name || "Room"}</span>
+            <span class="sub">${this._summary()}</span>
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
+      .tile {
+        position: relative; height: 100%; min-height: 84px; box-sizing: border-box;
+        border-radius: 22px; padding: 14px 16px; cursor: pointer;
+        display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+        background: rgba(120,120,128,0.16);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.1);
+        transition: transform 0.28s cubic-bezier(0.2,0.9,0.3,1.2), background 0.4s ease;
+        font-family: ${FONT_STACK_CSS};
+      }
+      .tile[data-pressed] { transform: scale(0.95); }
+      .tile.on { background: var(--accent); }
+      .badge {
+        width: 36px; height: 36px; border-radius: 50%;
+        display: grid; place-items: center; --mdc-icon-size: 20px;
+        background: rgba(120,120,128,0.28); color: var(--primary-text-color);
+        transition: background 0.4s ease, color 0.4s ease;
+      }
+      .tile.on .badge { background: rgba(255,255,255,0.92); color: #1c1c1e; }
+      .info { display: flex; flex-direction: column; min-width: 0; }
+      .name {
+        font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
+        color: var(--primary-text-color);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .sub { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); }
+      .tile.on .name, .tile.on .sub { color: #1c1c1e; }
+    `;
+  }
+}
+
+customElements.define("apple-home-area-card", AppleHomeAreaCard);
+
 // --- GUI editor ------------------------------------------------------------
 
 class AppleHomeCardEditor extends LitElement {
@@ -1182,11 +1633,35 @@ class AppleHomeCardEditor extends LitElement {
 customElements.define("apple-home-card-editor", AppleHomeCardEditor);
 
 // Register in the card picker.
+const DOCS_URL = "https://github.com/your-username/apple-home-card";
 window.customCards = window.customCards || [];
-window.customCards.push({
-  type: "apple-home-card",
-  name: "Apple Home Card",
-  description: "An Apple Home-inspired tile for lights, switches, and more.",
-  preview: true,
-  documentationURL: "https://github.com/your-username/apple-home-card",
-});
+window.customCards.push(
+  {
+    type: "apple-home-card",
+    name: "Apple Home Card",
+    description: "An Apple Home-inspired tile for lights, switches, and more.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-media-card",
+    name: "Apple Home Media",
+    description: "Wide media tile with artwork and inline transport controls.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-climate-card",
+    name: "Apple Home Thermostat",
+    description: "Climate tile with current/target temperature and inline +/-.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-area-card",
+    name: "Apple Home Area",
+    description: "Room summary tile — shows how many accessories are on; taps toggle the group.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  }
+);

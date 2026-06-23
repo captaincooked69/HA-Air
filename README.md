@@ -33,6 +33,17 @@ An Apple Home–inspired tile card for [Home Assistant](https://www.home-assista
    - URL `/local/apple-home-card.js`, type **JavaScript Module**.
 3. Hard-refresh.
 
+## Card types
+
+The package ships four cards, all sharing the same frosted look and the detail sheet:
+
+| Card | For | Notes |
+|------|-----|-------|
+| `custom:apple-home-card` | Anything | The universal accessory tile. |
+| `custom:apple-home-media-card` | `media_player` | Wide tile: artwork background + inline ⏮ ⏯ ⏭. |
+| `custom:apple-home-climate-card` | `climate` | Current/target temperature with inline − / +. |
+| `custom:apple-home-area-card` | A group of entities | Room summary ("2 of 3 on"); tap toggles the group or navigates. |
+
 ## Usage
 
 Add a card and pick **Apple Home Card**, or in YAML:
@@ -40,6 +51,26 @@ Add a card and pick **Apple Home Card**, or in YAML:
 ```yaml
 type: custom:apple-home-card
 entity: light.living_room
+```
+
+### Media tile
+
+```yaml
+type: custom:apple-home-media-card
+entity: media_player.sonos_arc
+```
+
+### Area / room tile
+
+```yaml
+type: custom:apple-home-area-card
+name: Living Room
+icon: mdi:sofa
+entities:               # used for the "N of M on" summary + group toggle
+  - light.living_room
+  - light.lamp
+  - switch.tv
+# navigation_path: /lovelace/living-room   # optional: tap navigates instead of toggling
 ```
 
 ### Options
@@ -73,9 +104,10 @@ The card looks good on any theme, but `themes/apple-home.yaml` rounds the rest o
 ## Roadmap
 
 - [x] Hold-to-open detail sheet (brightness/color/temp, media, cover, climate, vacuum)
-- [ ] Wider "feature" tiles (inline climate / media transport on the tile itself)
+- [x] Wider "feature" tiles — inline media transport + thermostat tile
+- [x] Group/area tiles (one tile summarising a whole room)
+- [ ] Auto-populate area tiles from HA areas (no manual entity list)
 - [ ] Per-tile size hints / aspect options
-- [ ] Group/area tiles (one tile summarising a whole room)
 - [ ] Bundled build option for stricter CSP setups
 
 ## Why a single file?

@@ -130,6 +130,47 @@ views:
       - type: grid
         cards:
           - type: heading
+            heading: Rooms
+            heading_style: title
+            icon: mdi:floor-plan
+          - type: custom:apple-home-area-card
+            name: Living Room
+            icon: mdi:sofa
+            navigation_path: /lovelace/rooms
+            entities:
+              - light.living_room_1
+              - light.living_room_lamp
+              - light.canvas_281d
+          - type: custom:apple-home-area-card
+            name: Bedroom
+            icon: mdi:bed
+            navigation_path: /lovelace/rooms
+            entities:
+              - light.bedroom
+          - type: custom:apple-home-area-card
+            name: Hallway & Stairs
+            icon: mdi:stairs
+            navigation_path: /lovelace/rooms
+            entities:
+              - light.hallway
+              - light.stairs
+          - type: custom:apple-home-area-card
+            name: Garage
+            icon: mdi:garage
+            navigation_path: /lovelace/rooms
+            entities:
+              - light.garage
+          - type: custom:apple-home-area-card
+            name: Office
+            icon: mdi:printer-3d
+            navigation_path: /lovelace/rooms
+            entities:
+              - light.3d_printing_lights
+              - switch.prusa_core_one
+
+      - type: grid
+        cards:
+          - type: heading
             heading: Status
             heading_style: title
             icon: mdi:home-analytics
@@ -180,10 +221,9 @@ views:
             name: Christmas Tree
             icon: mdi:pine-tree
             color: "#30d158"
-          - type: custom:apple-home-card
+          - type: custom:apple-home-media-card
             entity: media_player.arc
             name: Sonos Arc
-            icon: mdi:soundbar
           - type: custom:apple-home-card
             entity: media_player.living_room_tv
             name: TV
@@ -215,10 +255,9 @@ views:
             name: Dim
             icon: mdi:weather-night
             color: "#5e5ce6"
-          - type: custom:apple-home-card
+          - type: custom:apple-home-media-card
             entity: media_player.bedroom_home_assistant_voice_0a95d7
-            name: Speaker
-            icon: mdi:speaker
+            name: Bedroom Speaker
 
       - type: grid
         cards:
@@ -226,10 +265,9 @@ views:
             heading: Kitchen
             heading_style: title
             icon: mdi:fridge
-          - type: custom:apple-home-card
+          - type: custom:apple-home-media-card
             entity: media_player.kitchen
-            name: Sonos
-            icon: mdi:speaker
+            name: Kitchen Sonos
 
       - type: grid
         cards:
@@ -334,14 +372,12 @@ views:
             heading: Patio
             heading_style: title
             icon: mdi:flower
-          - type: custom:apple-home-card
+          - type: custom:apple-home-media-card
             entity: media_player.patio
-            name: Sonos
-            icon: mdi:speaker
-          - type: custom:apple-home-card
+            name: Patio Sonos
+          - type: custom:apple-home-media-card
             entity: media_player.patio_2
-            name: Beam
-            icon: mdi:soundbar
+            name: Patio Beam
 
       - type: grid
         cards:
