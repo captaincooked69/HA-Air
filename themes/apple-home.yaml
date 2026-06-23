@@ -30,6 +30,10 @@ Apple Home:
   ha-view-sections-column-gap: "12px"
   ha-view-sections-row-gap: "12px"
 
+  # Let the apple-home-background backdrop show through the lovelace surface.
+  # (Harmless without the background card — it just matches the page colour.)
+  lovelace-background: "transparent"
+
   modes:
     light:
       primary-background-color: "#f2f2f7"

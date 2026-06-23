@@ -11,6 +11,8 @@ An Apple Home–inspired tile card for [Home Assistant](https://www.home-assista
 - 🟦 **State-driven color fill** — tiles tint to an accent when active; lights scale the fill with brightness.
 - 🍏 **Apple-style tile language** — big corner radius, frosted backdrop, circular icon badge, soft depth.
 - 🎚️ **Detail sheet ("delve in")** — tap-and-hold slides up a frosted control panel: a big draggable brightness slider with color + temperature for lights, media transport + volume, cover position, climate +/-, vacuum controls. Falls through to full HA settings.
+- ✨ **Subtle motion** — spring press, a gentle badge "pop" and icon spin on state change, scene pulses — all quiet, all respecting `prefers-reduced-motion`.
+- 🌌 **Geometric/glass backgrounds** — a full-dashboard backdrop with six presets (aurora, sunset, ocean, midnight, mesh, mono) and an inline selector.
 - 👆 **Native interactions** — tap toggles, hold opens the detail sheet, double-tap configurable; haptics on supported devices; scenes/scripts pulse on activation.
 - 🎛️ **GUI editor** — full visual config in the dashboard editor, no YAML required.
 - 🌗 **Light & dark** — ships with a companion theme tuned for both.
@@ -43,6 +45,7 @@ The package ships four cards, all sharing the same frosted look and the detail s
 | `custom:apple-home-media-card` | `media_player` | Wide tile: artwork background + inline ⏮ ⏯ ⏭. |
 | `custom:apple-home-climate-card` | `climate` | Current/target temperature with inline − / +. |
 | `custom:apple-home-area-card` | A group of entities | Room summary ("2 of 3 on"); tap toggles the group or navigates. |
+| `custom:apple-home-background` | The whole dashboard | Full-screen geometric/glass backdrop + a preset selector. |
 
 ## Usage
 
@@ -72,6 +75,21 @@ entities:               # used for the "N of M on" summary + group toggle
   - switch.tv
 # navigation_path: /lovelace/living-room   # optional: tap navigates instead of toggling
 ```
+
+### Background
+
+Drop one of these anywhere on a dashboard. It paints a full-screen backdrop behind
+**every** view and (optionally) shows a preset picker. The choice is saved per-browser.
+
+```yaml
+type: custom:apple-home-background
+background: aurora      # aurora · sunset · ocean · midnight · mesh · mono
+selector: true          # show the inline preset picker
+```
+
+The backdrop makes HA's own surfaces transparent so the frosted tiles glass over it — pair
+it with the companion theme for the cleanest result. Both the backdrop drift and the tile
+"pop" animations honour `prefers-reduced-motion`.
 
 ### Options
 

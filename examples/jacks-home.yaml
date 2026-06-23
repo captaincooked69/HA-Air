@@ -30,6 +30,14 @@ views:
     type: sections
     max_columns: 4
     sections:
+      # The background card paints the whole-dashboard backdrop (any view) and
+      # shows the preset picker. Keep it once, anywhere — here at the top of Home.
+      - type: grid
+        cards:
+          - type: custom:apple-home-background
+            background: aurora
+            selector: true
+
       - type: grid
         cards:
           - type: heading

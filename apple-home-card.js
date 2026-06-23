@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 
 /* eslint-disable no-console */
 console.info(
@@ -116,6 +116,7 @@ class AppleHomeCard extends LitElement {
       _config: { state: true },
       _pressed: { state: true },
       _flash: { state: true },
+      _pop: { state: true },
     };
   }
 
@@ -141,11 +142,20 @@ class AppleHomeCard extends LitElement {
     };
   }
 
-  // Keep an open detail sheet fed with fresh state.
+  // Keep an open detail sheet fed with fresh state, and fire a tiny "pop"
+  // animation whenever the entity flips on/off.
   updated(changed) {
-    if (changed.has("hass") && this._sheet && this.hass) {
-      this._sheet.hass = this.hass;
+    if (!changed.has("hass")) return;
+    if (this._sheet && this.hass) this._sheet.hass = this.hass;
+    const s = this._stateObj;
+    if (!s) return;
+    const on = this._isOn(s);
+    if (this._prevOn !== undefined && on !== this._prevOn) {
+      this._pop = on ? "on" : "off";
+      window.clearTimeout(this._popTimer);
+      this._popTimer = window.setTimeout(() => (this._pop = null), 500);
     }
+    this._prevOn = on;
   }
 
   disconnectedCallback() {
@@ -426,6 +436,7 @@ class AppleHomeCard extends LitElement {
         <div
           class="tile"
           data-state=${unavailable ? "unavailable" : on ? "on" : "off"}
+          data-pop=${this._pop || "none"}
           ?data-pressed=${this._pressed}
           role="button"
           tabindex="0"
@@ -501,6 +512,7 @@ class AppleHomeCard extends LitElement {
 
       .tile[data-pressed] {
         transform: scale(0.95);
+        filter: brightness(1.05);
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
       }
 
@@ -543,6 +555,42 @@ class AppleHomeCard extends LitElement {
       .tile[data-state="on"] .badge {
         background: rgba(255, 255, 255, 0.92);
         color: #1c1c1e;
+      }
+
+      /* --- Micro-animations: a gentle "pop" on state change ---------------- */
+      @keyframes aha-badge-pop {
+        0% { transform: scale(1); }
+        40% { transform: scale(1.16); }
+        100% { transform: scale(1); }
+      }
+      @keyframes aha-fill-settle {
+        0% { transform: scale(1.06); opacity: 0; }
+        100% { transform: scale(1); opacity: var(--aha-fill-opacity, 1); }
+      }
+      @keyframes aha-icon-spin {
+        0% { transform: rotate(-12deg) scale(0.9); }
+        100% { transform: rotate(0) scale(1); }
+      }
+      .tile[data-pop="on"] .badge,
+      .tile[data-pop="off"] .badge {
+        animation: aha-badge-pop 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.25);
+      }
+      .tile[data-pop="on"] .badge ha-state-icon {
+        animation: aha-icon-spin 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.25);
+        display: inline-flex;
+      }
+      .tile[data-pop="on"] .fill {
+        animation: aha-fill-settle 0.5s cubic-bezier(0.2, 0.8, 0.3, 1);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .tile,
+        .fill,
+        .badge,
+        .badge ha-state-icon {
+          transition-duration: 0.01ms !important;
+          animation: none !important;
+        }
       }
 
       .info {
@@ -1565,6 +1613,264 @@ class AppleHomeAreaCard extends LitElement {
 
 customElements.define("apple-home-area-card", AppleHomeAreaCard);
 
+// ===========================================================================
+// Background — a full-screen Apple-style geometric/glass backdrop for the whole
+// dashboard, plus an optional inline selector to switch between presets.
+// ===========================================================================
+
+const BACKGROUNDS = {
+  aurora: {
+    name: "Aurora",
+    dark: true,
+    css:
+      "radial-gradient(at 18% 22%, #5e5ce6 0px, transparent 45%)," +
+      "radial-gradient(at 82% 8%, #ff375f 0px, transparent 40%)," +
+      "radial-gradient(at 75% 85%, #0a84ff 0px, transparent 45%)," +
+      "radial-gradient(at 8% 88%, #bf5af2 0px, transparent 40%)," +
+      "linear-gradient(135deg, #0b0b1f, #18112e)",
+  },
+  sunset: {
+    name: "Sunset",
+    dark: true,
+    css:
+      "radial-gradient(at 15% 20%, #ff9f0a 0px, transparent 45%)," +
+      "radial-gradient(at 85% 15%, #ff375f 0px, transparent 42%)," +
+      "radial-gradient(at 70% 90%, #bf5af2 0px, transparent 48%)," +
+      "linear-gradient(135deg, #2a0f1f, #1a0f2e)",
+  },
+  ocean: {
+    name: "Ocean",
+    dark: true,
+    css:
+      "radial-gradient(at 20% 25%, #0a84ff 0px, transparent 45%)," +
+      "radial-gradient(at 80% 20%, #64d2ff 0px, transparent 42%)," +
+      "radial-gradient(at 75% 85%, #30d158 0px, transparent 48%)," +
+      "linear-gradient(135deg, #06121f, #0a1f2e)",
+  },
+  midnight: {
+    name: "Midnight",
+    dark: true,
+    css:
+      "radial-gradient(at 50% 0%, #232357 0px, transparent 55%)," +
+      "radial-gradient(at 85% 90%, #1d3a5e 0px, transparent 50%)," +
+      "linear-gradient(180deg, #0a0a14, #050510)",
+  },
+  mesh: {
+    name: "Mesh",
+    dark: false,
+    css:
+      "radial-gradient(at 0% 0%, #ffd9ec 0px, transparent 50%)," +
+      "radial-gradient(at 100% 0%, #cfe5ff 0px, transparent 50%)," +
+      "radial-gradient(at 100% 100%, #d7fbe8 0px, transparent 50%)," +
+      "radial-gradient(at 0% 100%, #fff4cc 0px, transparent 50%)," +
+      "linear-gradient(#f6f7fb, #eef0f7)",
+  },
+  mono: {
+    name: "Mono",
+    dark: false,
+    css: "linear-gradient(160deg, #fbfbfd, #e9ebf1)",
+  },
+};
+
+// Shared geometric/glass overlay — smooth bezier lines + soft frosted blobs.
+const GLASS_OVERLAY_SVG = `
+<svg class="aha-bg-glass" viewBox="0 0 100 100" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">
+  <defs><filter id="ahaBlur" x="-30%" y="-30%" width="160%" height="160%">
+    <feGaussianBlur stdDeviation="2.4"/></filter></defs>
+  <g fill="none" stroke="#ffffff" stroke-opacity="0.10" stroke-width="0.18">
+    <path d="M-5 30 C 25 15, 55 45, 105 25"/>
+    <path d="M-5 55 C 30 40, 60 70, 105 50"/>
+    <path d="M-5 80 C 25 66, 70 94, 105 74"/>
+  </g>
+  <g filter="url(#ahaBlur)">
+    <ellipse cx="22" cy="26" rx="22" ry="17" fill="#ffffff" fill-opacity="0.05"/>
+    <ellipse cx="82" cy="74" rx="26" ry="19" fill="#ffffff" fill-opacity="0.05"/>
+    <rect x="58" y="14" width="30" height="20" rx="8" fill="#ffffff" fill-opacity="0.04"/>
+  </g>
+</svg>`;
+
+function ensureBackgroundLayer() {
+  let layer = document.getElementById("aha-bg-layer");
+  if (layer) return layer;
+
+  // Make HA's own surfaces see-through so the backdrop shows behind the cards.
+  if (!document.getElementById("aha-bg-transparency")) {
+    const t = document.createElement("style");
+    t.id = "aha-bg-transparency";
+    t.textContent =
+      "html, body { background: transparent !important; }" +
+      ":root { --lovelace-background: transparent !important;" +
+      " --view-background: transparent !important; }" +
+      "hui-view, hui-sections-view, hui-masonry-view, hui-panel-view," +
+      " hui-root, ha-drawer .content { background: transparent !important; }";
+    document.head.appendChild(t);
+  }
+
+  if (!document.getElementById("aha-bg-anim")) {
+    const a = document.createElement("style");
+    a.id = "aha-bg-anim";
+    a.textContent =
+      "#aha-bg-layer{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none;}" +
+      "#aha-bg-layer .aha-bg-gradient{position:absolute;inset:-12%;background-size:cover;" +
+      "animation:aha-bg-drift 44s ease-in-out infinite alternate;}" +
+      "#aha-bg-layer .aha-bg-glass{position:absolute;inset:0;width:100%;height:100%;" +
+      "animation:aha-bg-float 52s ease-in-out infinite alternate;}" +
+      "@keyframes aha-bg-drift{from{transform:scale(1) translate(0,0)}" +
+      "to{transform:scale(1.08) translate(1%,-1.5%)}}" +
+      "@keyframes aha-bg-float{from{transform:translate(0,0)}to{transform:translate(-2%,2%)}}" +
+      "@media (prefers-reduced-motion: reduce){#aha-bg-layer .aha-bg-gradient," +
+      "#aha-bg-layer .aha-bg-glass{animation:none !important}}";
+    document.head.appendChild(a);
+  }
+
+  layer = document.createElement("div");
+  layer.id = "aha-bg-layer";
+  const grad = document.createElement("div");
+  grad.className = "aha-bg-gradient";
+  layer.appendChild(grad);
+  layer.insertAdjacentHTML("beforeend", GLASS_OVERLAY_SVG);
+  document.body.appendChild(layer);
+  return layer;
+}
+
+function applyBackground(key) {
+  const bg = BACKGROUNDS[key] ? key : "aurora";
+  const layer = ensureBackgroundLayer();
+  layer.querySelector(".aha-bg-gradient").style.background = BACKGROUNDS[bg].css;
+  layer.dataset.key = bg;
+  try {
+    localStorage.setItem("apple-home-background", bg);
+  } catch (e) {
+    /* private mode */
+  }
+}
+
+function currentBackgroundKey() {
+  try {
+    return localStorage.getItem("apple-home-background");
+  } catch (e) {
+    return null;
+  }
+}
+
+class AppleHomeBackground extends LitElement {
+  static get properties() {
+    return { hass: {}, _config: { state: true } };
+  }
+
+  static getStubConfig() {
+    return { background: "aurora", selector: true };
+  }
+
+  setConfig(config) {
+    this._config = { background: "aurora", selector: true, ...config };
+  }
+
+  getCardSize() {
+    return this._config && this._config.selector ? 2 : 1;
+  }
+
+  getGridOptions() {
+    const tall = this._config && this._config.selector;
+    return { columns: 12, rows: tall ? 3 : 1 };
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    applyBackground(
+      currentBackgroundKey() || (this._config && this._config.background) || "aurora"
+    );
+  }
+
+  _select(key) {
+    applyBackground(key);
+    this.requestUpdate();
+  }
+
+  render() {
+    if (!this._config || !this._config.selector) return html``;
+    const cur = currentBackgroundKey() || this._config.background;
+    return html`
+      <ha-card>
+        <div class="wrap">
+          <div class="title">Background</div>
+          <div class="row">
+            ${Object.entries(BACKGROUNDS).map(
+              ([k, b]) => html`
+                <button
+                  class="chip ${k === cur ? "sel" : ""}"
+                  @click=${() => this._select(k)}
+                >
+                  <span class="sw" style="background:${b.css}"></span>
+                  <span class="lbl">${b.name}</span>
+                </button>
+              `
+            )}
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      ha-card {
+        background: var(--aha-tile-background, rgba(120, 120, 128, 0.16));
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        border: none;
+        border-radius: 22px;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
+        font-family: ${FONT_STACK_CSS};
+      }
+      .wrap { padding: 14px 16px; }
+      .title {
+        font-weight: 600;
+        font-size: 15px;
+        letter-spacing: -0.01em;
+        margin-bottom: 12px;
+        color: var(--primary-text-color);
+      }
+      .row {
+        display: flex;
+        gap: 14px;
+        overflow-x: auto;
+        padding-bottom: 4px;
+        scrollbar-width: none;
+      }
+      .row::-webkit-scrollbar { display: none; }
+      .chip {
+        flex: none;
+        background: none;
+        border: none;
+        padding: 0;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      .sw {
+        width: 68px;
+        height: 46px;
+        border-radius: 13px;
+        background-size: cover !important;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15),
+          0 2px 8px rgba(0, 0, 0, 0.3);
+        transition: transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+      }
+      .chip:active .sw { transform: scale(0.93); }
+      .chip.sel .sw {
+        box-shadow: 0 0 0 3px var(--primary-color, #0a84ff),
+          0 2px 8px rgba(0, 0, 0, 0.3);
+      }
+      .lbl { font-size: 12px; color: var(--secondary-text-color); }
+    `;
+  }
+}
+
+customElements.define("apple-home-background", AppleHomeBackground);
+
 // --- GUI editor ------------------------------------------------------------
 
 class AppleHomeCardEditor extends LitElement {
@@ -1661,6 +1967,13 @@ window.customCards.push(
     type: "apple-home-area-card",
     name: "Apple Home Area",
     description: "Room summary tile — shows how many accessories are on; taps toggle the group.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-background",
+    name: "Apple Home Background",
+    description: "Full-screen geometric/glass dashboard backdrop with a preset selector.",
     preview: true,
     documentationURL: DOCS_URL,
   }
