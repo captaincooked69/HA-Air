@@ -2613,7 +2613,7 @@ class AppleHomeCardEditor extends LitElement {
 customElements.define("apple-home-card-editor", AppleHomeCardEditor);
 
 // Register in the card picker.
-const DOCS_URL = "https://github.com/your-username/apple-home-card";
+const DOCS_URL = "https://github.com/captaincooked69/HA-Air";
 window.customCards = window.customCards || [];
 window.customCards.push(
   {
