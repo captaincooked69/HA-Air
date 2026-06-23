@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 /* eslint-disable no-console */
 console.info(
@@ -94,11 +94,12 @@ function isEntityOn(stateObj) {
 
 // Open the Apple Home detail sheet for an entity. Returns the element so the
 // caller can keep feeding it fresh `hass`.
-function createSheet(hass, entityId, accent, onClosed) {
+function createSheet(hass, entityId, accent, onClosed, direction) {
   const sheet = document.createElement("apple-home-sheet");
   sheet.hass = hass;
   sheet.entityId = entityId;
   sheet.accent = accent;
+  sheet.direction = direction === "down" ? "down" : "up";
   if (onClosed) sheet.addEventListener("sheet-closed", onClosed);
   document.body.appendChild(sheet);
   requestAnimationFrame(() => sheet.show());
@@ -198,6 +199,7 @@ const GLASS_BADGE_CSS = css`
     position: relative;
     overflow: hidden;
     isolation: isolate;
+    flex: none; /* the icon circle never shrinks, at any tile size */
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45),
       inset 0 -1px 2px rgba(0, 0, 0, 0.12);
   }
@@ -297,7 +299,8 @@ class AppleHomeCard extends LitElement {
       this.hass,
       this._config.entity,
       this._accent(),
-      () => (this._sheet = undefined)
+      () => (this._sheet = undefined),
+      this._config.slider_direction
     );
   }
 
@@ -631,6 +634,14 @@ class AppleHomeCard extends LitElement {
         overflow: visible;
       }
 
+      /* On a very small tile, keep the icon + name and drop the sub-label so
+         the circle is always visible and never crowded out. */
+      @container ahatile (max-width: 128px) {
+        .content { padding: 12px; gap: 6px; }
+        .state { display: none; }
+        .name { font-size: 14px; }
+      }
+
       /* Content scales up as the tile gets wider. */
       @container ahatile (min-width: 175px) {
         .content { padding: 16px 18px; }
@@ -811,6 +822,7 @@ class AppleHomeSheet extends LitElement {
       hass: {},
       entityId: {},
       accent: {},
+      direction: {},
       _open: { state: true },
       _dragPct: { state: true },
     };
@@ -872,7 +884,13 @@ class AppleHomeSheet extends LitElement {
   _onSliderMove(e) {
     if (!this._sliderEl) return;
     const rect = this._sliderEl.getBoundingClientRect();
-    const pct = Math.round(((rect.bottom - e.clientY) / rect.height) * 100);
+    // "up" (default): fill anchored at the bottom, drag up = brighter.
+    // "down": fill anchored at the top, drag down = brighter.
+    const raw =
+      this.direction === "down"
+        ? (e.clientY - rect.top) / rect.height
+        : (rect.bottom - e.clientY) / rect.height;
+    const pct = Math.round(raw * 100);
     const clamped = Math.max(0, Math.min(100, pct));
     if (Math.abs(e.clientY - this._dragStartY) > 4) this._dragMoved = true;
     this._dragPct = clamped;
@@ -921,7 +939,7 @@ class AppleHomeSheet extends LitElement {
 
     return html`
       <div
-        class="big-slider ${on ? "on" : ""}"
+        class="big-slider ${on ? "on" : ""} ${this.direction === "down" ? "dir-down" : ""}"
         @pointerdown=${this._onSliderDown}
         @pointermove=${this._onSliderMove}
         @pointerup=${this._onSliderUp}
@@ -1228,6 +1246,10 @@ class AppleHomeSheet extends LitElement {
         left: 0; right: 0; bottom: 0;
         background: var(--sheet-accent);
         transition: height 0.1s linear;
+      }
+      .big-slider.dir-down .fill {
+        bottom: auto;
+        top: 0;
       }
       .slider-foot {
         position: absolute;
@@ -2072,6 +2094,457 @@ class AppleHomeBackground extends LitElement {
 
 customElements.define("apple-home-background", AppleHomeBackground);
 
+// ===========================================================================
+// Weather tile — big condition, temperature, hi/lo + a forecast strip, with a
+// gradient that reflects the current condition.
+// ===========================================================================
+
+const WEATHER_ICON = {
+  "clear-night": "mdi:weather-night",
+  cloudy: "mdi:weather-cloudy",
+  fog: "mdi:weather-fog",
+  hail: "mdi:weather-hail",
+  lightning: "mdi:weather-lightning",
+  "lightning-rainy": "mdi:weather-lightning-rainy",
+  partlycloudy: "mdi:weather-partly-cloudy",
+  pouring: "mdi:weather-pouring",
+  rainy: "mdi:weather-rainy",
+  snowy: "mdi:weather-snowy",
+  "snowy-rainy": "mdi:weather-snowy-rainy",
+  sunny: "mdi:weather-sunny",
+  windy: "mdi:weather-windy",
+  "windy-variant": "mdi:weather-windy-variant",
+  exceptional: "mdi:alert-circle-outline",
+};
+
+const WEATHER_GRADIENT = {
+  sunny: "linear-gradient(160deg, #2f8fff, #8ec9ff)",
+  "clear-night": "linear-gradient(160deg, #0b1026, #243056)",
+  partlycloudy: "linear-gradient(160deg, #4f93d6, #a9c7e8)",
+  cloudy: "linear-gradient(160deg, #5f6773, #99a2ad)",
+  fog: "linear-gradient(160deg, #7c828c, #b9bfc7)",
+  rainy: "linear-gradient(160deg, #3c526b, #6d8aa6)",
+  pouring: "linear-gradient(160deg, #2c3e52, #51708c)",
+  "lightning-rainy": "linear-gradient(160deg, #2a2a40, #5a5f86)",
+  lightning: "linear-gradient(160deg, #33334d, #6a6f96)",
+  snowy: "linear-gradient(160deg, #8fa6bd, #dfe9f3)",
+  "snowy-rainy": "linear-gradient(160deg, #7e93ad, #c7d6e6)",
+  windy: "linear-gradient(160deg, #4a8fb0, #9fc4d6)",
+  _default: "linear-gradient(160deg, #3a6ea5, #74a3d0)",
+};
+
+class AppleHomeWeatherCard extends LitElement {
+  static get properties() {
+    return { hass: {}, _config: { state: true } };
+  }
+
+  static getStubConfig(hass) {
+    const w = Object.keys(hass.states).find((e) => e.startsWith("weather."));
+    return { entity: w || "" };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error("You must define a weather entity");
+    this._config = config;
+  }
+
+  getCardSize() {
+    return 3;
+  }
+
+  getGridOptions() {
+    return gridFor(this._config && this._config.size, { columns: 6, rows: 3 });
+  }
+
+  get _stateObj() {
+    return this.hass ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  _unit() {
+    const s = this._stateObj;
+    return (
+      (s && s.attributes.temperature_unit) ||
+      (this.hass && this.hass.config.unit_system.temperature) ||
+      "°"
+    );
+  }
+
+  _round(n) {
+    return n == null || isNaN(n) ? null : Math.round(n);
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const s = this._stateObj;
+    if (!s) return html`<ha-card><div class="wx">Not found</div></ha-card>`;
+    const a = s.attributes;
+    const cond = s.state;
+    const icon = WEATHER_ICON[cond] || "mdi:weather-cloudy";
+    const grad = WEATHER_GRADIENT[cond] || WEATHER_GRADIENT._default;
+    const unit = this._unit();
+    const temp = this._round(a.temperature);
+    const name = this._config.name || a.friendly_name || "Weather";
+
+    const fc = Array.isArray(a.forecast) ? a.forecast.slice(0, 6) : [];
+    const hi = this._round(fc.length ? fc[0].temperature : a.temperature);
+    const lo = this._round(fc.length ? fc[0].templow : undefined);
+
+    return html`
+      <ha-card style="--wx-grad:${grad}">
+        <div class="wx">
+          <div class="head">
+            <div class="now">
+              <div class="temp">${temp != null ? `${temp}°` : "—"}</div>
+              <div class="meta">
+                <span class="name">${name}</span>
+                <span class="cond">${this._cap(cond)}</span>
+                <span class="hilo">
+                  ${hi != null ? html`H:${hi}°` : ""}
+                  ${lo != null ? html` L:${lo}°` : ""}
+                </span>
+              </div>
+            </div>
+            <ha-icon class="big-ic" icon=${icon}></ha-icon>
+          </div>
+          ${fc.length
+            ? html`<div class="strip">
+                ${fc.map(
+                  (f) => html`<div class="col">
+                    <span class="d">${this._day(f.datetime)}</span>
+                    <ha-icon icon=${WEATHER_ICON[f.condition] || "mdi:weather-cloudy"}></ha-icon>
+                    <span class="t">${this._round(f.temperature)}°</span>
+                  </div>`
+                )}
+              </div>`
+            : ""}
+        </div>
+      </ha-card>
+    `;
+  }
+
+  _cap(s) {
+    return typeof s === "string"
+      ? s.replace(/-/g, " ").replace(/^\w/, (c) => c.toUpperCase())
+      : s;
+  }
+
+  _day(dt) {
+    if (!dt) return "";
+    const d = new Date(dt);
+    return d.toLocaleDateString(undefined, { weekday: "short" });
+  }
+
+  static get styles() {
+    return css`
+      :host { display: block; height: 100%; }
+      ha-card {
+        height: 100%;
+        border: none;
+        border-radius: 22px;
+        background: var(--wx-grad);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.18);
+        overflow: hidden;
+        font-family: ${FONT_STACK_CSS};
+        color: #fff;
+      }
+      .wx {
+        height: 100%;
+        box-sizing: border-box;
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .head { display: flex; align-items: flex-start; justify-content: space-between; }
+      .now { display: flex; align-items: baseline; gap: 14px; }
+      .temp {
+        font-size: 52px;
+        font-weight: 300;
+        letter-spacing: -0.03em;
+        line-height: 0.9;
+        text-shadow: 0 1px 8px rgba(0, 0, 0, 0.2);
+      }
+      .meta { display: flex; flex-direction: column; gap: 2px; }
+      .name { font-size: 15px; font-weight: 600; }
+      .cond { font-size: 14px; opacity: 0.92; }
+      .hilo { font-size: 13px; opacity: 0.85; }
+      .big-ic { --mdc-icon-size: 56px; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25)); }
+      .strip {
+        display: flex;
+        justify-content: space-between;
+        gap: 6px;
+        border-top: 1px solid rgba(255, 255, 255, 0.18);
+        padding-top: 10px;
+      }
+      .col {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        flex: 1;
+        --mdc-icon-size: 22px;
+      }
+      .col .d { font-size: 12px; opacity: 0.85; }
+      .col .t { font-size: 13px; font-weight: 600; }
+    `;
+  }
+}
+
+customElements.define("apple-home-weather-card", AppleHomeWeatherCard);
+
+// ===========================================================================
+// Graph tile — current value + a sparkline of recent history. For temperature,
+// humidity, air-quality and any numeric sensor.
+// ===========================================================================
+
+const GRAPH_COLORS = {
+  temperature: "#ff9f0a",
+  humidity: "#0a84ff",
+  pm25: "#30d158",
+  pm10: "#30d158",
+  aqi: "#bf5af2",
+  carbon_dioxide: "#64d2ff",
+  voc: "#5e5ce6",
+  pressure: "#8e8e93",
+  power: "#ffd60a",
+  _default: "#0a84ff",
+};
+
+class AppleHomeGraphCard extends LitElement {
+  static get properties() {
+    return { hass: {}, _config: { state: true }, _points: { state: true } };
+  }
+
+  static getStubConfig(hass) {
+    const s = Object.keys(hass.states).find(
+      (e) => e.startsWith("sensor.") && !isNaN(parseFloat(hass.states[e].state))
+    );
+    return { entity: s || "" };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error("You must define a sensor entity");
+    this._config = { hours: 24, ...config };
+    this._points = undefined;
+  }
+
+  getCardSize() {
+    return 2;
+  }
+
+  getGridOptions() {
+    return gridFor(this._config && this._config.size, { columns: 6, rows: 2 });
+  }
+
+  connectedCallback() {
+    super.connectedCallback();
+    this._fetch();
+    this._timer = window.setInterval(() => this._fetch(), 5 * 60 * 1000);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    window.clearInterval(this._timer);
+  }
+
+  get _stateObj() {
+    return this.hass ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  _color() {
+    if (this._config.color) return this._config.color;
+    const s = this._stateObj;
+    const dc = s && s.attributes.device_class;
+    if (dc && GRAPH_COLORS[dc]) return GRAPH_COLORS[dc];
+    const id = this._config.entity;
+    if (/pm2_?5|pm25/.test(id)) return GRAPH_COLORS.pm25;
+    if (/humid/.test(id)) return GRAPH_COLORS.humidity;
+    if (/temp/.test(id)) return GRAPH_COLORS.temperature;
+    if (/voc/.test(id)) return GRAPH_COLORS.voc;
+    return GRAPH_COLORS._default;
+  }
+
+  async _fetch() {
+    if (!this.hass || !this._config) return;
+    const end = new Date();
+    const start = new Date(end.getTime() - (this._config.hours || 24) * 3600000);
+    try {
+      const path =
+        `history/period/${start.toISOString()}` +
+        `?filter_entity_id=${this._config.entity}` +
+        `&minimal_response&significant_changes_only&no_attributes`;
+      const res = await this.hass.callApi("GET", path);
+      const series = (res && res[0]) || [];
+      this._points = series
+        .map((p) => ({
+          t: new Date(p.last_changed || p.last_updated || p.lu || p.lc).getTime(),
+          v: parseFloat(p.state != null ? p.state : p.s),
+        }))
+        .filter((p) => !isNaN(p.v) && !isNaN(p.t));
+    } catch (e) {
+      this._points = [];
+    }
+  }
+
+  _path(pts, w, h, pad) {
+    const xs = pts.map((p) => p.t);
+    const vs = pts.map((p) => p.v);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minV = Math.min(...vs);
+    const maxV = Math.max(...vs);
+    const spanX = maxX - minX || 1;
+    const spanV = maxV - minV || 1;
+    const X = (t) => ((t - minX) / spanX) * w;
+    const Y = (v) => pad + (1 - (v - minV) / spanV) * (h - pad * 2);
+    const line = pts
+      .map((p, i) => `${i ? "L" : "M"}${X(p.t).toFixed(1)} ${Y(p.v).toFixed(1)}`)
+      .join(" ");
+    const area = `${line} L${w} ${h} L0 ${h} Z`;
+    return { line, area, minV, maxV };
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const s = this._stateObj;
+    const color = this._color();
+    const unit = (s && s.attributes.unit_of_measurement) || "";
+    const name =
+      this._config.name || (s && s.attributes.friendly_name) || this._config.entity;
+    const current = s ? this._fmt(s.state) : "—";
+
+    const pts = this._points;
+    let graph = html`<div class="loading">${pts ? "No history" : "…"}</div>`;
+    if (pts && pts.length > 1) {
+      const w = 300;
+      const h = 90;
+      const { line, area, minV, maxV } = this._path(pts, w, h, 6);
+      graph = html`
+        <svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="g-${this._gid()}" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="${color}" stop-opacity="0.35"></stop>
+              <stop offset="100%" stop-color="${color}" stop-opacity="0"></stop>
+            </linearGradient>
+          </defs>
+          <path d=${area} fill="url(#g-${this._gid()})"></path>
+          <path
+            d=${line}
+            fill="none"
+            stroke=${color}
+            stroke-width="2.5"
+            stroke-linejoin="round"
+            stroke-linecap="round"
+            vector-effect="non-scaling-stroke"
+          ></path>
+        </svg>
+        <div class="minmax">
+          <span>${this._fmt(minV)}</span><span>${this._fmt(maxV)}</span>
+        </div>
+      `;
+    }
+
+    return html`
+      <ha-card style="--g-color:${color}">
+        <div class="wrap" @click=${this._moreInfo}>
+          <div class="head">
+            <span class="name">${name}</span>
+            <span class="val">${current}<span class="unit">${unit}</span></span>
+          </div>
+          <div class="chart">${graph}</div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  _gid() {
+    if (!this.__gid) this.__gid = Math.random().toString(36).slice(2, 8);
+    return this.__gid;
+  }
+
+  _fmt(v) {
+    const n = Number(v);
+    if (isNaN(n)) return v;
+    return Math.abs(n) >= 100 ? Math.round(n) : Math.round(n * 10) / 10;
+  }
+
+  _moreInfo() {
+    const e = new Event("hass-more-info", { bubbles: true, composed: true });
+    e.detail = { entityId: this._config.entity };
+    this.dispatchEvent(e);
+  }
+
+  static get styles() {
+    return css`
+      :host { display: block; height: 100%; }
+      ha-card {
+        height: 100%;
+        border: none;
+        border-radius: 22px;
+        background: var(--aha-tile-background, rgba(120, 120, 128, 0.16));
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+        font-family: ${FONT_STACK_CSS};
+      }
+      .wrap {
+        height: 100%;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        cursor: pointer;
+      }
+      .head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        padding: 14px 16px 6px;
+      }
+      .name {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        color: var(--primary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .val {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        color: var(--g-color);
+        white-space: nowrap;
+      }
+      .unit { font-size: 13px; font-weight: 500; opacity: 0.7; margin-left: 2px; }
+      .chart { position: relative; flex: 1; min-height: 48px; }
+      .spark { position: absolute; inset: 0; width: 100%; height: 100%; }
+      .minmax {
+        position: absolute;
+        inset: 6px 12px 4px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        align-items: flex-end;
+        font-size: 11px;
+        color: var(--secondary-text-color);
+        pointer-events: none;
+      }
+      .loading {
+        display: grid;
+        place-items: center;
+        height: 100%;
+        color: var(--secondary-text-color);
+        font-size: 13px;
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-graph-card", AppleHomeGraphCard);
+
 // --- GUI editor ------------------------------------------------------------
 
 class AppleHomeCardEditor extends LitElement {
@@ -2175,6 +2648,20 @@ window.customCards.push(
     type: "apple-home-background",
     name: "Apple Home Background",
     description: "Full-screen geometric/glass dashboard backdrop with a preset selector.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-weather-card",
+    name: "Apple Home Weather",
+    description: "Condition + temperature + forecast strip with a condition-aware gradient.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-graph-card",
+    name: "Apple Home Graph",
+    description: "Current value + sparkline history for temperature, humidity, air quality, etc.",
     preview: true,
     documentationURL: DOCS_URL,
   }

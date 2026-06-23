@@ -186,9 +186,9 @@ views:
             entity: person.jack
             name: Jack
             icon: mdi:account
-          - type: custom:apple-home-card
+          - type: custom:apple-home-weather-card
             entity: weather.forecast_home
-            name: Weather
+            name: Home
             size: large
           - type: custom:apple-home-card
             entity: sensor.raxe300_gateway_download_speed
@@ -360,20 +360,18 @@ views:
             entity: binary_sensor.office_door
             name: Door
             icon: mdi:door
-          - type: custom:apple-home-card
+          - type: custom:apple-home-graph-card
             entity: sensor.3d_printing_sensor_temperature
-            name: Temp
-            icon: mdi:thermometer
-            color: "#ff9f0a"
-          - type: custom:apple-home-card
+            name: Temperature
+          - type: custom:apple-home-graph-card
+            entity: sensor.3d_printing_sensor_humidity
+            name: Humidity
+          - type: custom:apple-home-graph-card
             entity: sensor.3d_printing_sensor_voc_index
             name: Air VOC
-            icon: mdi:air-filter
-            color: "#30d158"
-          - type: custom:apple-home-card
+          - type: custom:apple-home-graph-card
             entity: sensor.3d_printing_sensor_current_pm2_5
             name: PM2.5
-            icon: mdi:blur
 
       - type: grid
         cards:
@@ -490,6 +488,22 @@ views:
             entity: binary_sensor.raxe300_gateway_wan_status
             name: Internet
             icon: mdi:web
+
+      - type: grid
+        cards:
+          - type: heading
+            heading: Sensors
+            heading_style: title
+            icon: mdi:chart-line
+          - type: custom:apple-home-graph-card
+            entity: sensor.timmerflotte_temp_hmd_sen_temperature
+            name: Temperature
+          - type: custom:apple-home-graph-card
+            entity: sensor.timmerflotte_temp_hmd_sen_humidity
+            name: Humidity
+          - type: custom:apple-home-graph-card
+            entity: sensor.timmerflotte_temp_hmd_sen_temperature_2
+            name: Temperature 2
 
       - type: grid
         cards:
