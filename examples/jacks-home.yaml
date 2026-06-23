@@ -189,6 +189,7 @@ views:
           - type: custom:apple-home-card
             entity: weather.forecast_home
             name: Weather
+            size: large
           - type: custom:apple-home-card
             entity: sensor.raxe300_gateway_download_speed
             name: Download

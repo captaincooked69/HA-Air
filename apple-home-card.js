@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 
 /* eslint-disable no-console */
 console.info(
@@ -109,6 +109,133 @@ function createSheet(hass, entityId, accent, onClosed) {
 const FONT_STACK_CSS = css`-apple-system, BlinkMacSystemFont, "SF Pro Display",
   "Segoe UI", Roboto, sans-serif`;
 
+// Named tile footprints for the sections grid (12-col). `size: large` etc.
+const TILE_SIZES = {
+  small: { columns: 2, rows: 2 },
+  medium: { columns: 3, rows: 2 },
+  large: { columns: 4, rows: 3 },
+  wide: { columns: 6, rows: 2 },
+  hero: { columns: 6, rows: 4 },
+};
+
+function gridFor(size, fallback) {
+  return { ...(TILE_SIZES[size] || fallback), min_columns: 2, min_rows: 1 };
+}
+
+// ---------------------------------------------------------------------------
+// LightField — a single shared light source (the pointer) drives a specular
+// highlight on every registered icon badge, so the glass icons appear to react
+// to one another. One pointer listener + a cached-rect rAF loop keeps it cheap.
+// ---------------------------------------------------------------------------
+const LightField = (() => {
+  const badges = new Set();
+  const rects = new Map();
+  let px = typeof window !== "undefined" ? window.innerWidth / 2 : 0;
+  let py = -180; // gentle ambient light from above when idle
+  let raf = 0;
+  let rectsDirty = true;
+  let inited = false;
+  const RANGE = 360;
+
+  function schedule() {
+    if (!raf) raf = requestAnimationFrame(frame);
+  }
+  function markRects() {
+    rectsDirty = true;
+    schedule();
+  }
+  function frame() {
+    raf = 0;
+    if (rectsDirty) {
+      rects.clear();
+      badges.forEach((b) => {
+        if (b.isConnected) rects.set(b, b.getBoundingClientRect());
+      });
+      rectsDirty = false;
+    }
+    badges.forEach((b) => {
+      const r = rects.get(b);
+      if (!r) return;
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const dist = Math.hypot(px - cx, py - cy);
+      const glow = Math.max(0, Math.min(1, 1 - dist / RANGE));
+      b.style.setProperty("--sx", `${px - r.left}px`);
+      b.style.setProperty("--sy", `${py - r.top}px`);
+      b.style.setProperty("--glow", glow.toFixed(3));
+    });
+  }
+  function onMove(e) {
+    px = e.clientX;
+    py = e.clientY;
+    schedule();
+  }
+  function init() {
+    if (inited || typeof window === "undefined") return;
+    inited = true;
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("scroll", markRects, { passive: true, capture: true });
+    window.addEventListener("resize", markRects, { passive: true });
+  }
+  return {
+    register(b) {
+      if (!b) return;
+      init();
+      badges.add(b);
+      markRects();
+    },
+    unregister(b) {
+      badges.delete(b);
+      rects.delete(b);
+    },
+  };
+})();
+
+// Glass-icon styling shared by every card's badge: a frosted body with a static
+// top sheen plus the LightField specular driven by --sx/--sy/--glow.
+const GLASS_BADGE_CSS = css`
+  .badge {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45),
+      inset 0 -1px 2px rgba(0, 0, 0, 0.12);
+  }
+  .badge ha-state-icon,
+  .badge ha-icon {
+    position: relative;
+    z-index: 1;
+  }
+  .badge::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      155deg,
+      rgba(255, 255, 255, 0.28),
+      rgba(255, 255, 255, 0) 55%
+    );
+    pointer-events: none;
+  }
+  .badge::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: radial-gradient(
+      circle 58px at var(--sx, 50%) var(--sy, 50%),
+      rgba(255, 255, 255, 0.85),
+      rgba(255, 255, 255, 0) 70%
+    );
+    opacity: var(--glow, 0);
+    transition: opacity 0.25s ease;
+    pointer-events: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .badge::after { transition: none; }
+  }
+`;
+
 class AppleHomeCard extends LitElement {
   static get properties() {
     return {
@@ -161,6 +288,7 @@ class AppleHomeCard extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this._sheet) this._sheet.close();
+    if (this._badge) LightField.unregister(this._badge);
   }
 
   _openControls() {
@@ -177,9 +305,14 @@ class AppleHomeCard extends LitElement {
     return 1;
   }
 
-  // Sections view: aim for a square-ish accessory tile.
+  // Sections view: footprint follows the optional `size` (default square-ish).
   getGridOptions() {
-    return { columns: 3, rows: 2, min_columns: 2, min_rows: 2 };
+    return gridFor(this._config && this._config.size, TILE_SIZES.medium);
+  }
+
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".badge");
+    LightField.register(this._badge);
   }
 
   // --- Helpers -------------------------------------------------------------
@@ -472,6 +605,7 @@ class AppleHomeCard extends LitElement {
 
   static get styles() {
     return css`
+      ${GLASS_BADGE_CSS}
       :host {
         --aha-radius: var(--aha-card-radius, 22px);
         --aha-tile-bg: var(
@@ -481,6 +615,12 @@ class AppleHomeCard extends LitElement {
         --aha-text: var(--aha-tile-foreground, var(--primary-text-color));
         --aha-subtext: var(--aha-tile-subforeground, var(--secondary-text-color));
         --aha-badge-bg: var(--aha-badge-background, rgba(120, 120, 128, 0.24));
+        /* The tile is a size container so its contents scale to whatever cell
+           the grid (or a drag-resize) gives it. */
+        container-type: inline-size;
+        container-name: ahatile;
+        display: block;
+        height: 100%;
       }
 
       ha-card {
@@ -489,6 +629,20 @@ class AppleHomeCard extends LitElement {
         box-shadow: none;
         height: 100%;
         overflow: visible;
+      }
+
+      /* Content scales up as the tile gets wider. */
+      @container ahatile (min-width: 175px) {
+        .content { padding: 16px 18px; }
+        .badge { width: 44px; height: 44px; --mdc-icon-size: 24px; }
+        .name { font-size: 17px; }
+        .state { font-size: 14px; }
+      }
+      @container ahatile (min-width: 250px) {
+        .content { padding: 20px 22px; }
+        .badge { width: 54px; height: 54px; --mdc-icon-size: 30px; }
+        .name { font-size: 20px; }
+        .state { font-size: 15px; }
       }
 
       .tile {
@@ -1211,7 +1365,12 @@ class AppleHomeMediaCard extends LitElement {
   }
 
   getGridOptions() {
-    return { columns: 6, rows: 2, min_columns: 4, min_rows: 2 };
+    return gridFor(this._config && this._config.size, { columns: 6, rows: 2 });
+  }
+
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".badge");
+    LightField.register(this._badge);
   }
 
   updated(changed) {
@@ -1221,6 +1380,7 @@ class AppleHomeMediaCard extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     if (this._sheet) this._sheet.close();
+    if (this._badge) LightField.unregister(this._badge);
   }
 
   get _stateObj() {
@@ -1298,6 +1458,8 @@ class AppleHomeMediaCard extends LitElement {
 
   static get styles() {
     return css`
+      ${GLASS_BADGE_CSS}
+      :host { display: block; height: 100%; }
       ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
       .tile {
         position: relative; height: 100%; min-height: 96px;
@@ -1382,11 +1544,22 @@ class AppleHomeClimateCard extends LitElement {
   }
 
   getGridOptions() {
-    return { columns: 3, rows: 2, min_columns: 2, min_rows: 2 };
+    return gridFor(this._config && this._config.size, { columns: 3, rows: 2 });
+  }
+
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".badge");
+    LightField.register(this._badge);
   }
 
   updated(changed) {
     if (changed.has("hass") && this._sheet && this.hass) this._sheet.hass = this.hass;
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._sheet) this._sheet.close();
+    if (this._badge) LightField.unregister(this._badge);
   }
 
   get _stateObj() {
@@ -1444,6 +1617,8 @@ class AppleHomeClimateCard extends LitElement {
 
   static get styles() {
     return css`
+      ${GLASS_BADGE_CSS}
+      :host { display: block; height: 100%; }
       ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
       .tile {
         position: relative; height: 100%; min-height: 96px; box-sizing: border-box;
@@ -1512,7 +1687,17 @@ class AppleHomeAreaCard extends LitElement {
   }
 
   getGridOptions() {
-    return { columns: 3, rows: 2, min_columns: 2, min_rows: 2 };
+    return gridFor(this._config && this._config.size, { columns: 3, rows: 2 });
+  }
+
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".badge");
+    LightField.register(this._badge);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._badge) LightField.unregister(this._badge);
   }
 
   get _states() {
@@ -1578,7 +1763,23 @@ class AppleHomeAreaCard extends LitElement {
 
   static get styles() {
     return css`
+      ${GLASS_BADGE_CSS}
+      :host {
+        display: block; height: 100%;
+        container-type: inline-size; container-name: ahatile;
+      }
       ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
+
+      @container ahatile (min-width: 175px) {
+        .tile { padding: 16px 18px; }
+        .badge { width: 44px; height: 44px; --mdc-icon-size: 24px; }
+        .name { font-size: 17px; }
+        .sub { font-size: 14px; }
+      }
+      @container ahatile (min-width: 250px) {
+        .badge { width: 54px; height: 54px; --mdc-icon-size: 30px; }
+        .name { font-size: 20px; }
+      }
       .tile {
         position: relative; height: 100%; min-height: 84px; box-sizing: border-box;
         border-radius: 22px; padding: 14px 16px; cursor: pointer;

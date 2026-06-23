@@ -11,6 +11,8 @@ An Apple Home–inspired tile card for [Home Assistant](https://www.home-assista
 - 🟦 **State-driven color fill** — tiles tint to an accent when active; lights scale the fill with brightness.
 - 🍏 **Apple-style tile language** — big corner radius, frosted backdrop, circular icon badge, soft depth.
 - 🎚️ **Detail sheet ("delve in")** — tap-and-hold slides up a frosted control panel: a big draggable brightness slider with color + temperature for lights, media transport + volume, cover position, climate +/-, vacuum controls. Falls through to full HA settings.
+- 🔭 **Scalable tiles** — `size: small → hero`, and the contents auto-scale to the cell via container queries, so they look right whether you set a size or drag-resize in the UI.
+- 💎 **Reactive glass icons** — one shared light source (your pointer) sweeps a specular highlight across every icon at once, so neighbouring icons catch the light together; a static frosted sheen keeps them glassy at rest.
 - ✨ **Subtle motion** — spring press, a gentle badge "pop" and icon spin on state change, scene pulses — all quiet, all respecting `prefers-reduced-motion`.
 - 🌌 **Geometric/glass backgrounds** — a full-dashboard backdrop with six presets (aurora, sunset, ocean, midnight, mesh, mono) and an inline selector.
 - 👆 **Native interactions** — tap toggles, hold opens the detail sheet, double-tap configurable; haptics on supported devices; scenes/scripts pulse on activation.
@@ -99,9 +101,22 @@ it with the companion theme for the cleanest result. Both the backdrop drift and
 | `name`              | string | friendly name            | Override the title.                                            |
 | `icon`              | string | inferred                 | Override the icon (e.g. `mdi:sofa`).                           |
 | `color`             | string | per-domain               | Accent color when on (hex, e.g. `#ffd60a`).                    |
+| `size`              | string | `medium`                 | Tile footprint: `small` · `medium` · `large` · `wide` · `hero`. |
 | `tap_action`        | object | `{action: toggle}`       | Standard HA action object.                                     |
 | `hold_action`       | object | `{action: more-info}`    | Standard HA action object.                                     |
 | `double_tap_action` | object | `{action: more-info}`    | Standard HA action object.                                     |
+
+### Sizing
+
+```yaml
+- type: custom:apple-home-card
+  entity: weather.home
+  size: large        # small · medium · large · wide · hero
+```
+
+`size` sets the grid footprint; the tile's icon, text and padding scale to fit automatically.
+In a **sections** dashboard you can also just drag the resize handle — the content adapts the
+same way, because each tile is a CSS size container.
 
 ### Example
 
