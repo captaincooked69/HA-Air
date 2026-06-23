@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 
 /* eslint-disable no-console */
 console.info(
@@ -111,10 +111,36 @@ class AppleHomeCard extends LitElement {
     }
     this._config = {
       tap_action: { action: "toggle" },
-      hold_action: { action: "more-info" },
-      double_tap_action: { action: "more-info" },
+      hold_action: { action: "controls" },
+      double_tap_action: { action: "controls" },
       ...config,
     };
+  }
+
+  // Keep an open detail sheet fed with fresh state.
+  updated(changed) {
+    if (changed.has("hass") && this._sheet && this.hass) {
+      this._sheet.hass = this.hass;
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._sheet) this._sheet.close();
+  }
+
+  _openControls() {
+    if (this._sheet) return;
+    const sheet = document.createElement("apple-home-sheet");
+    sheet.hass = this.hass;
+    sheet.entityId = this._config.entity;
+    sheet.accent = this._accent();
+    sheet.addEventListener("sheet-closed", () => {
+      this._sheet = undefined;
+    });
+    document.body.appendChild(sheet);
+    this._sheet = sheet;
+    requestAnimationFrame(() => sheet.show());
   }
 
   getCardSize() {
@@ -243,7 +269,8 @@ class AppleHomeCard extends LitElement {
     const domain = domainOf(stateObj.entity_id);
     const behavior = DOMAIN_BEHAVIOR[domain];
     if (!behavior || !behavior.toggle) {
-      this._moreInfo();
+      // Nothing to toggle (sensor, climate, alarm…) → open the detail sheet.
+      this._openControls();
       return;
     }
     const spec =
@@ -272,6 +299,9 @@ class AppleHomeCard extends LitElement {
         return;
       case "more-info":
         this._moreInfo();
+        return;
+      case "controls":
+        this._openControls();
         return;
       case "navigate":
         if (actionConfig.navigation_path) {
@@ -542,6 +572,548 @@ class AppleHomeCard extends LitElement {
 
 customElements.define("apple-home-card", AppleHomeCard);
 
+// ===========================================================================
+// Detail sheet — the Apple Home "delve into the accessory" controls.
+// Slides up as a frosted panel: a big draggable brightness slider for lights,
+// color/temperature, media transport, cover position, climate, vacuum, etc.
+// ===========================================================================
+
+class AppleHomeSheet extends LitElement {
+  static get properties() {
+    return {
+      hass: {},
+      entityId: {},
+      accent: {},
+      _open: { state: true },
+      _dragPct: { state: true },
+    };
+  }
+
+  get _stateObj() {
+    return this.hass && this.entityId
+      ? this.hass.states[this.entityId]
+      : undefined;
+  }
+
+  show() {
+    this._open = true;
+  }
+
+  close() {
+    if (this._closing) return;
+    this._closing = true;
+    this._open = false;
+    window.setTimeout(() => {
+      this.dispatchEvent(new Event("sheet-closed"));
+      this.remove();
+    }, 320);
+  }
+
+  _service(domain, service, data) {
+    this.hass.callService(domain, service, {
+      entity_id: this.entityId,
+      ...data,
+    });
+  }
+
+  _moreInfo() {
+    const e = new Event("hass-more-info", { bubbles: true, composed: true });
+    e.detail = { entityId: this.entityId };
+    // dispatch from the active HA root so the dialog mounts correctly
+    (document.querySelector("home-assistant") || this).dispatchEvent(e);
+    this.close();
+  }
+
+  // ---- Light brightness slider (vertical drag) ----------------------------
+
+  _brightnessPct(s) {
+    if (this._dragPct != null) return this._dragPct;
+    if (s.state !== "on") return 0;
+    const b = s.attributes.brightness;
+    return b == null ? 100 : Math.round((b / 255) * 100);
+  }
+
+  _onSliderDown(e) {
+    e.preventDefault();
+    this._sliderEl = e.currentTarget;
+    this._sliderEl.setPointerCapture(e.pointerId);
+    this._dragStartY = e.clientY;
+    this._dragMoved = false;
+    this._dragStartPct = this._brightnessPct(this._stateObj);
+  }
+
+  _onSliderMove(e) {
+    if (!this._sliderEl) return;
+    const rect = this._sliderEl.getBoundingClientRect();
+    const pct = Math.round(((rect.bottom - e.clientY) / rect.height) * 100);
+    const clamped = Math.max(0, Math.min(100, pct));
+    if (Math.abs(e.clientY - this._dragStartY) > 4) this._dragMoved = true;
+    this._dragPct = clamped;
+  }
+
+  _onSliderUp(e) {
+    if (!this._sliderEl) return;
+    this._sliderEl.releasePointerCapture?.(e.pointerId);
+    this._sliderEl = undefined;
+    const s = this._stateObj;
+    if (!this._dragMoved) {
+      // A tap toggles the light.
+      this._dragPct = null;
+      this._service("light", s.state === "on" ? "turn_off" : "turn_on");
+      return;
+    }
+    const pct = this._dragPct;
+    this._dragPct = null;
+    if (pct <= 0) this._service("light", "turn_off");
+    else this._service("light", "turn_on", { brightness_pct: pct });
+  }
+
+  _setColorTemp(kelvin) {
+    this._service("light", "turn_on", { color_temp_kelvin: kelvin });
+  }
+
+  _setColor(hs) {
+    this._service("light", "turn_on", { hs_color: hs });
+  }
+
+  // ---- Renderers per domain ----------------------------------------------
+
+  _renderLight(s) {
+    const pct = this._brightnessPct(s);
+    const on = s.state === "on";
+    const modes = s.attributes.supported_color_modes || [];
+    const hasTemp = modes.includes("color_temp");
+    const hasColor = modes.some((m) =>
+      ["hs", "rgb", "rgbw", "rgbww", "xy"].includes(m)
+    );
+    const minK = s.attributes.min_color_temp_kelvin || 2200;
+    const maxK = s.attributes.max_color_temp_kelvin || 6500;
+    const colors = [
+      [40, 90], [25, 100], [0, 0], [210, 90], [270, 80], [320, 80], [120, 70],
+    ];
+
+    return html`
+      <div
+        class="big-slider ${on ? "on" : ""}"
+        @pointerdown=${this._onSliderDown}
+        @pointermove=${this._onSliderMove}
+        @pointerup=${this._onSliderUp}
+        @pointercancel=${this._onSliderUp}
+      >
+        <div class="fill" style="height:${pct}%"></div>
+        <div class="slider-foot">
+          <ha-state-icon
+            .hass=${this.hass}
+            .stateObj=${s}
+          ></ha-state-icon>
+          <span class="pct">${on ? `${pct}%` : "Off"}</span>
+        </div>
+      </div>
+
+      ${hasTemp
+        ? html`<div class="control-row">
+            <span class="row-label">Temperature</span>
+            <input
+              class="temp"
+              type="range"
+              min=${minK}
+              max=${maxK}
+              .value=${String(s.attributes.color_temp_kelvin || Math.round((minK + maxK) / 2))}
+              @change=${(e) => this._setColorTemp(Number(e.target.value))}
+            />
+          </div>`
+        : ""}
+      ${hasColor
+        ? html`<div class="swatches">
+            ${colors.map(
+              (hs) => html`<button
+                class="swatch"
+                style="background:hsl(${hs[0]},${hs[1]}%,${hs[1] === 0 ? 90 : 55}%)"
+                @click=${() => this._setColor(hs)}
+              ></button>`
+            )}
+          </div>`
+        : ""}
+    `;
+  }
+
+  _renderMedia(s) {
+    const a = s.attributes;
+    const playing = s.state === "playing";
+    return html`
+      <div class="media">
+        ${a.entity_picture
+          ? html`<img class="art" src=${a.entity_picture} alt="" />`
+          : html`<div class="art placeholder">
+              <ha-icon icon="mdi:music"></ha-icon>
+            </div>`}
+        <div class="media-title">${a.media_title || "Not playing"}</div>
+        <div class="media-sub">${a.media_artist || a.app_name || ""}</div>
+        <div class="transport">
+          <button @click=${() => this._service("media_player", "media_previous_track")}>
+            <ha-icon icon="mdi:skip-previous"></ha-icon>
+          </button>
+          <button class="primary" @click=${() => this._service("media_player", "media_play_pause")}>
+            <ha-icon icon=${playing ? "mdi:pause" : "mdi:play"}></ha-icon>
+          </button>
+          <button @click=${() => this._service("media_player", "media_next_track")}>
+            <ha-icon icon="mdi:skip-next"></ha-icon>
+          </button>
+        </div>
+        <div class="control-row">
+          <ha-icon icon="mdi:volume-low"></ha-icon>
+          <input
+            type="range" min="0" max="100"
+            .value=${String(Math.round((a.volume_level || 0) * 100))}
+            @change=${(e) =>
+              this._service("media_player", "volume_set", {
+                volume_level: Number(e.target.value) / 100,
+              })}
+          />
+          <ha-icon icon="mdi:volume-high"></ha-icon>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderCover(s) {
+    const pos = s.attributes.current_position;
+    const supportsPos = pos != null;
+    return html`
+      <div class="cover">
+        <div class="transport">
+          <button @click=${() => this._service("cover", "open_cover")}>
+            <ha-icon icon="mdi:arrow-up"></ha-icon>
+          </button>
+          <button @click=${() => this._service("cover", "stop_cover")}>
+            <ha-icon icon="mdi:stop"></ha-icon>
+          </button>
+          <button @click=${() => this._service("cover", "close_cover")}>
+            <ha-icon icon="mdi:arrow-down"></ha-icon>
+          </button>
+        </div>
+        ${supportsPos
+          ? html`<div class="control-row">
+              <span class="row-label">Position</span>
+              <input
+                type="range" min="0" max="100" .value=${String(pos)}
+                @change=${(e) =>
+                  this._service("cover", "set_cover_position", {
+                    position: Number(e.target.value),
+                  })}
+              />
+            </div>`
+          : ""}
+      </div>
+    `;
+  }
+
+  _renderClimate(s) {
+    const a = s.attributes;
+    const target = a.temperature;
+    const step = a.target_temp_step || 0.5;
+    return html`
+      <div class="climate">
+        <div class="big-number">
+          <button @click=${() => this._service("climate", "set_temperature", { temperature: target - step })}>
+            <ha-icon icon="mdi:minus"></ha-icon>
+          </button>
+          <div class="temp-readout">
+            <span class="t">${target != null ? `${target}°` : "—"}</span>
+            <span class="sub">${a.current_temperature != null ? `Now ${a.current_temperature}°` : ""}</span>
+          </div>
+          <button @click=${() => this._service("climate", "set_temperature", { temperature: target + step })}>
+            <ha-icon icon="mdi:plus"></ha-icon>
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  _renderVacuum(s) {
+    const cleaning = s.state === "cleaning";
+    return html`
+      <div class="grid-btns">
+        <button @click=${() => this._service("vacuum", cleaning ? "pause" : "start")}>
+          <ha-icon icon=${cleaning ? "mdi:pause" : "mdi:play"}></ha-icon>
+          <span>${cleaning ? "Pause" : "Start"}</span>
+        </button>
+        <button @click=${() => this._service("vacuum", "return_to_base")}>
+          <ha-icon icon="mdi:home-import-outline"></ha-icon><span>Dock</span>
+        </button>
+        <button @click=${() => this._service("vacuum", "locate")}>
+          <ha-icon icon="mdi:map-marker"></ha-icon><span>Locate</span>
+        </button>
+      </div>
+    `;
+  }
+
+  _renderToggle(s) {
+    const domain = domainOf(s.entity_id);
+    const behavior = DOMAIN_BEHAVIOR[domain];
+    const on = behavior ? behavior.on(s) : s.state === "on";
+    const toggleable = behavior && behavior.toggle;
+    if (!toggleable) {
+      return html`<div class="readout">
+        <span class="big-state">${this._capitalize(s.state)}</span>
+        ${s.attributes.unit_of_measurement
+          ? html`<span class="unit">${s.attributes.unit_of_measurement}</span>`
+          : ""}
+      </div>`;
+    }
+    return html`
+      <button
+        class="toggle-big ${on ? "on" : ""}"
+        @click=${() => this._service("homeassistant", on ? "turn_off" : "turn_on")}
+      >
+        <ha-state-icon .hass=${this.hass} .stateObj=${s}></ha-state-icon>
+        <span>${on ? "On" : "Off"}</span>
+      </button>
+    `;
+  }
+
+  _capitalize(s) {
+    return typeof s === "string" ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+  }
+
+  _body(s) {
+    const domain = domainOf(s.entity_id);
+    switch (domain) {
+      case "light": return this._renderLight(s);
+      case "media_player": return this._renderMedia(s);
+      case "cover": return this._renderCover(s);
+      case "climate": return this._renderClimate(s);
+      case "vacuum": return this._renderVacuum(s);
+      default: return this._renderToggle(s);
+    }
+  }
+
+  render() {
+    const s = this._stateObj;
+    const name = s
+      ? s.attributes.friendly_name || this.entityId
+      : this.entityId;
+    return html`
+      <div
+        class="backdrop ${this._open ? "open" : ""}"
+        @click=${(e) => {
+          if (e.target === e.currentTarget) this.close();
+        }}
+      >
+        <div
+          class="sheet ${this._open ? "open" : ""}"
+          style="--sheet-accent:${this.accent || "#0a84ff"}"
+        >
+          <div class="grabber"></div>
+          <div class="head">
+            <span class="title">${name}</span>
+            <button class="close" @click=${() => this.close()}>
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div class="content">
+            ${s ? this._body(s) : html`<div class="readout">Unavailable</div>`}
+          </div>
+          <button class="more" @click=${() => this._moreInfo()}>
+            Open in Home Assistant
+          </button>
+        </div>
+      </div>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        --sheet-fg: #fff;
+        --sheet-sub: rgba(235, 235, 245, 0.6);
+        --sheet-bg: rgba(28, 28, 30, 0.82);
+        --sheet-control: rgba(120, 120, 128, 0.32);
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display",
+          "Segoe UI", Roboto, sans-serif;
+      }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0);
+        transition: background 0.3s ease;
+      }
+      .backdrop.open {
+        background: rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(2px);
+      }
+      .sheet {
+        width: 100%;
+        max-width: 420px;
+        margin: 0 8px;
+        box-sizing: border-box;
+        background: var(--sheet-bg);
+        backdrop-filter: blur(40px) saturate(180%);
+        -webkit-backdrop-filter: blur(40px) saturate(180%);
+        color: var(--sheet-fg);
+        border-radius: 28px 28px 0 0;
+        padding: 10px 20px 20px;
+        transform: translateY(110%);
+        transition: transform 0.36s cubic-bezier(0.2, 0.9, 0.3, 1);
+        box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.4);
+      }
+      @media (min-width: 600px) {
+        .backdrop { align-items: center; }
+        .sheet { border-radius: 28px; transform: translateY(20px) scale(0.96); opacity: 0; transition: transform 0.32s cubic-bezier(0.2,0.9,0.3,1), opacity 0.32s ease; }
+        .sheet.open { transform: translateY(0) scale(1); opacity: 1; }
+      }
+      .sheet.open { transform: translateY(0); }
+      .grabber {
+        width: 38px; height: 5px; border-radius: 3px;
+        background: rgba(235, 235, 245, 0.3);
+        margin: 6px auto 12px;
+      }
+      .head {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 18px;
+      }
+      .title { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+      .close {
+        width: 30px; height: 30px; border: none; border-radius: 50%;
+        background: var(--sheet-control); color: var(--sheet-sub);
+        display: grid; place-items: center; cursor: pointer;
+        --mdc-icon-size: 18px;
+      }
+      .content { display: flex; flex-direction: column; gap: 18px; }
+
+      /* Big vertical brightness slider */
+      .big-slider {
+        position: relative;
+        height: 280px;
+        border-radius: 26px;
+        background: var(--sheet-control);
+        overflow: hidden;
+        cursor: pointer;
+        touch-action: none;
+        user-select: none;
+      }
+      .big-slider .fill {
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        background: var(--sheet-accent);
+        transition: height 0.1s linear;
+      }
+      .slider-foot {
+        position: absolute;
+        left: 0; right: 0; bottom: 0;
+        padding: 18px;
+        display: flex; align-items: center; justify-content: space-between;
+        --mdc-icon-size: 26px;
+        color: #fff;
+        mix-blend-mode: difference;
+        pointer-events: none;
+      }
+      .pct { font-size: 22px; font-weight: 600; }
+
+      .control-row {
+        display: flex; align-items: center; gap: 12px;
+        --mdc-icon-size: 20px; color: var(--sheet-sub);
+      }
+      .row-label { font-size: 14px; min-width: 84px; }
+      .control-row input[type="range"] { flex: 1; }
+
+      input[type="range"] {
+        -webkit-appearance: none; appearance: none;
+        height: 30px; border-radius: 15px;
+        background: var(--sheet-control);
+        outline: none; margin: 0;
+      }
+      input[type="range"].temp {
+        background: linear-gradient(to right, #ffb15c, #fff4e8, #cfe5ff);
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none; appearance: none;
+        width: 26px; height: 26px; border-radius: 50%;
+        background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.4);
+        cursor: pointer;
+      }
+      input[type="range"]::-moz-range-thumb {
+        width: 26px; height: 26px; border: none; border-radius: 50%;
+        background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.4); cursor: pointer;
+      }
+
+      .swatches { display: flex; gap: 12px; justify-content: space-between; }
+      .swatch {
+        width: 36px; height: 36px; border-radius: 50%;
+        border: 2px solid rgba(255,255,255,0.25); cursor: pointer; padding: 0;
+      }
+
+      /* Media */
+      .media { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+      .art {
+        width: 160px; height: 160px; border-radius: 16px; object-fit: cover;
+        box-shadow: 0 8px 30px rgba(0,0,0,0.5); margin-bottom: 8px;
+      }
+      .art.placeholder {
+        display: grid; place-items: center; background: var(--sheet-control);
+        --mdc-icon-size: 56px; color: var(--sheet-sub);
+      }
+      .media-title { font-size: 17px; font-weight: 600; text-align: center; }
+      .media-sub { font-size: 14px; color: var(--sheet-sub); margin-bottom: 8px; }
+
+      .transport {
+        display: flex; align-items: center; justify-content: center; gap: 26px;
+        --mdc-icon-size: 30px; margin: 6px 0 4px;
+      }
+      .transport button {
+        background: none; border: none; color: #fff; cursor: pointer;
+        display: grid; place-items: center;
+      }
+      .transport button.primary { --mdc-icon-size: 44px; }
+
+      /* Climate */
+      .big-number {
+        display: flex; align-items: center; justify-content: space-between;
+        background: var(--sheet-control); border-radius: 26px; padding: 18px 24px;
+      }
+      .big-number button {
+        width: 48px; height: 48px; border-radius: 50%; border: none;
+        background: rgba(120,120,128,0.4); color: #fff; cursor: pointer;
+        --mdc-icon-size: 24px; display: grid; place-items: center;
+      }
+      .temp-readout { text-align: center; display: flex; flex-direction: column; }
+      .temp-readout .t { font-size: 40px; font-weight: 600; letter-spacing: -0.02em; }
+      .temp-readout .sub { font-size: 13px; color: var(--sheet-sub); }
+
+      /* Vacuum / generic grid buttons */
+      .grid-btns { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+      .grid-btns button, .toggle-big {
+        display: flex; flex-direction: column; align-items: center; gap: 8px;
+        padding: 18px 0; border: none; border-radius: 20px;
+        background: var(--sheet-control); color: #fff; cursor: pointer;
+        font-size: 14px; --mdc-icon-size: 26px;
+      }
+      .toggle-big {
+        width: 100%; padding: 40px 0; --mdc-icon-size: 40px; font-size: 17px;
+        transition: background 0.3s ease;
+      }
+      .toggle-big.on { background: var(--sheet-accent); color: #1c1c1e; }
+
+      .readout { text-align: center; padding: 30px 0; }
+      .big-state { font-size: 40px; font-weight: 600; }
+      .unit { font-size: 20px; color: var(--sheet-sub); margin-left: 4px; }
+
+      .more {
+        margin-top: 22px; width: 100%; padding: 14px; border: none;
+        border-radius: 16px; background: var(--sheet-control);
+        color: var(--sheet-accent); font-size: 15px; font-weight: 600;
+        cursor: pointer;
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-sheet", AppleHomeSheet);
+
 // --- GUI editor ------------------------------------------------------------
 
 class AppleHomeCardEditor extends LitElement {
@@ -565,11 +1137,11 @@ class AppleHomeCardEditor extends LitElement {
       },
       {
         name: "hold_action",
-        selector: { ui_action: { default_action: "more-info" } },
+        selector: { ui_action: { default_action: "controls" } },
       },
       {
         name: "double_tap_action",
-        selector: { ui_action: { default_action: "more-info" } },
+        selector: { ui_action: { default_action: "controls" } },
       },
     ];
   }

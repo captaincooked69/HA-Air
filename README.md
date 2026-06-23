@@ -10,7 +10,8 @@ An Apple Home–inspired tile card for [Home Assistant](https://www.home-assista
 
 - 🟦 **State-driven color fill** — tiles tint to an accent when active; lights scale the fill with brightness.
 - 🍏 **Apple-style tile language** — big corner radius, frosted backdrop, circular icon badge, soft depth.
-- 👆 **Native interactions** — tap toggles, hold opens more-info, double-tap configurable; haptics on supported devices.
+- 🎚️ **Detail sheet ("delve in")** — tap-and-hold slides up a frosted control panel: a big draggable brightness slider with color + temperature for lights, media transport + volume, cover position, climate +/-, vacuum controls. Falls through to full HA settings.
+- 👆 **Native interactions** — tap toggles, hold opens the detail sheet, double-tap configurable; haptics on supported devices; scenes/scripts pulse on activation.
 - 🎛️ **GUI editor** — full visual config in the dashboard editor, no YAML required.
 - 🌗 **Light & dark** — ships with a companion theme tuned for both.
 - 🧩 **Broad domain support** — light, switch, fan, cover, lock, climate, media_player, sensor, binary_sensor, person, and more.
@@ -71,9 +72,10 @@ The card looks good on any theme, but `themes/apple-home.yaml` rounds the rest o
 
 ## Roadmap
 
-- [ ] Hold-to-open custom control sheet (sliders for brightness/color/temp) instead of more-info
-- [ ] Wider "feature" tiles (climate with target temp controls, media with transport)
+- [x] Hold-to-open detail sheet (brightness/color/temp, media, cover, climate, vacuum)
+- [ ] Wider "feature" tiles (inline climate / media transport on the tile itself)
 - [ ] Per-tile size hints / aspect options
+- [ ] Group/area tiles (one tile summarising a whole room)
 - [ ] Bundled build option for stricter CSP setups
 
 ## Why a single file?
