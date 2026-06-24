@@ -8,7 +8,9 @@ An Apple Home–inspired tile card for [Home Assistant](https://www.home-assista
 
 ## Features
 
-- 🟦 **State-driven color fill** — tiles tint to an accent when active; lights scale the fill with brightness.
+- 🟦 **State-driven color fill** — tiles tint to an accent when active.
+- 🎚️ **Drag to dim** — drag up/down on a light tile to set brightness (or a cover tile for position); tap toggles, hold opens controls.
+- ⚡ **Snappy** — each tile only re-renders when its own entity changes, and toggles flip optimistically (no waiting on the round-trip).
 - 🍏 **Apple-style tile language** — big corner radius, frosted backdrop, circular icon badge, soft depth.
 - 🎚️ **Detail sheet ("delve in")** — tap-and-hold slides up a frosted control panel: a big draggable brightness slider with color + temperature for lights, media transport + volume, cover position, climate +/-, vacuum controls. Falls through to full HA settings.
 - 🌤️ **Weather & graph tiles** — a pretty condition-aware weather tile with a forecast strip, and sparkline graph tiles for temperature/humidity/air-quality sensors.
@@ -53,6 +55,7 @@ The package ships four cards, all sharing the same frosted look and the detail s
 | `custom:apple-home-graph-card` | numeric `sensor` | Current value + sparkline of recent history. |
 | `custom:apple-home-background` | The whole dashboard | Full-screen geometric/glass backdrop + a preset selector. |
 | `custom:apple-home-pager` | A container of cards | iPhone-style swipeable pages (one room per page) with page dots. |
+| `custom:apple-home-group` | A container of cards | A tile that opens into a frosted panel of the cards inside. |
 
 ## Usage
 

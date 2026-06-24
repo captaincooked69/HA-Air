@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.8.1";
+const VERSION = "0.9.0";
 
 /* eslint-disable no-console */
 console.info(
@@ -83,6 +83,20 @@ const DOMAIN_ACCENT = {
 
 function domainOf(entityId) {
   return entityId ? entityId.split(".")[0] : "";
+}
+
+// Re-render only when one of the given entities actually changed (plus any
+// local reactive state). Keeps big dashboards snappy.
+function onlyIfEntitiesChanged(host, changed, entityIds, localKeys) {
+  if (!host._config) return false;
+  for (const k of localKeys || []) if (changed.has(k)) return true;
+  if (changed.has("_config")) return true;
+  if (changed.has("hass")) {
+    const old = changed.get("hass");
+    if (!old || !host.hass) return true;
+    return entityIds.some((id) => old.states[id] !== host.hass.states[id]);
+  }
+  return false;
 }
 
 // Shared "is this entity active?" using the same rules as the tile.
@@ -246,7 +260,25 @@ class AppleHomeCard extends LitElement {
       _pressed: { state: true },
       _flash: { state: true },
       _pop: { state: true },
+      _drag: { state: true },
+      _optimistic: { state: true },
     };
+  }
+
+  // Only re-render when THIS entity changes (not on every state change across
+  // the whole system) — keeps interactions snappy on big installs.
+  shouldUpdate(changed) {
+    if (!this._config) return false;
+    if (
+      changed.has("_config") || changed.has("_pressed") || changed.has("_flash") ||
+      changed.has("_pop") || changed.has("_drag") || changed.has("_optimistic")
+    ) return true;
+    if (changed.has("hass")) {
+      const old = changed.get("hass");
+      if (!old || !this.hass) return true;
+      return old.states[this._config.entity] !== this.hass.states[this._config.entity];
+    }
+    return false;
   }
 
   static getStubConfig(hass) {
@@ -271,20 +303,24 @@ class AppleHomeCard extends LitElement {
     };
   }
 
-  // Keep an open detail sheet fed with fresh state, and fire a tiny "pop"
-  // animation whenever the entity flips on/off.
+  // Keep an open detail sheet fed with fresh state, reconcile the optimistic
+  // flag, and fire a tiny "pop" animation whenever the entity flips on/off.
   updated(changed) {
     if (!changed.has("hass")) return;
     if (this._sheet && this.hass) this._sheet.hass = this.hass;
     const s = this._stateObj;
     if (!s) return;
-    const on = this._isOn(s);
-    if (this._prevOn !== undefined && on !== this._prevOn) {
-      this._pop = on ? "on" : "off";
+    const behavior = DOMAIN_BEHAVIOR[domainOf(s.entity_id)];
+    const realOn = behavior ? behavior.on(s) : s.state === "on";
+    if (this._optimistic != null && realOn === this._optimistic) {
+      this._optimistic = null; // HA caught up with the optimistic guess
+    }
+    if (this._prevOn !== undefined && realOn !== this._prevOn) {
+      this._pop = realOn ? "on" : "off";
       window.clearTimeout(this._popTimer);
       this._popTimer = window.setTimeout(() => (this._pop = null), 500);
     }
-    this._prevOn = on;
+    this._prevOn = realOn;
   }
 
   disconnectedCallback() {
@@ -328,14 +364,63 @@ class AppleHomeCard extends LitElement {
 
   _isOn(stateObj) {
     if (this._flash) return true; // momentary pulse for scenes/scripts/buttons
+    if (this._optimistic != null) return this._optimistic;
     const behavior = DOMAIN_BEHAVIOR[domainOf(stateObj.entity_id)];
     return behavior ? behavior.on(stateObj) : stateObj.state === "on";
   }
 
   _accent() {
     if (this._config.color) return this._config.color;
+    const s = this._stateObj;
     const d = domainOf(this._config.entity);
+    // Colour door/window/garage contacts amber when they matter.
+    if (d === "binary_sensor" && s) {
+      const dc = s.attributes.device_class;
+      if (["door", "window", "garage_door", "opening"].includes(dc)) return "#ff9f0a";
+    }
     return DOMAIN_ACCENT[d] || DOMAIN_ACCENT._default;
+  }
+
+  // Domains where a vertical drag sets a level (brightness / cover position).
+  _isLevelDomain() {
+    const s = this._stateObj;
+    if (!s) return false;
+    const d = domainOf(s.entity_id);
+    if (d === "light") {
+      const m = s.attributes.supported_color_modes || [];
+      return m.length > 0 && !(m.length === 1 && m[0] === "onoff");
+    }
+    if (d === "cover") return s.attributes.current_position != null;
+    return false;
+  }
+
+  _level(s) {
+    const d = domainOf(s.entity_id);
+    if (d === "light") {
+      if (!this._isOn(s)) return 0;
+      const b = s.attributes.brightness;
+      return b == null ? 100 : Math.round((b / 255) * 100);
+    }
+    if (d === "cover") {
+      return s.attributes.current_position != null
+        ? s.attributes.current_position
+        : this._isOn(s) ? 100 : 0;
+    }
+    return this._isOn(s) ? 100 : 0;
+  }
+
+  _applyLevel(pct) {
+    const s = this._stateObj;
+    if (!s) return;
+    const d = domainOf(s.entity_id);
+    const id = s.entity_id;
+    if (d === "light") {
+      if (pct <= 0) this.hass.callService("light", "turn_off", { entity_id: id });
+      else this.hass.callService("light", "turn_on", { entity_id: id, brightness_pct: pct });
+      this._optimistic = pct > 0;
+    } else if (d === "cover") {
+      this.hass.callService("cover", "set_cover_position", { entity_id: id, position: pct });
+    }
   }
 
   _name(stateObj) {
@@ -444,6 +529,12 @@ class AppleHomeCard extends LitElement {
       this._openControls();
       return;
     }
+    // Optimistic flip so the tile reacts instantly, before HA round-trips.
+    if (!behavior.momentary) {
+      const realOn = behavior.on(stateObj);
+      this._optimistic = !realOn;
+    }
+
     const spec =
       typeof behavior.toggle === "function"
         ? behavior.toggle(stateObj)
@@ -498,22 +589,47 @@ class AppleHomeCard extends LitElement {
     }
   }
 
-  // Pointer handling: distinguish tap / hold / double-tap.
-  _onPointerDown() {
+  // Pointer handling: tap / hold / double-tap, plus vertical drag-to-set-level
+  // on dimmable lights and positionable covers.
+  _onPointerDown(e) {
     this._pressed = true;
     this._holdFired = false;
+    this._dragging = false;
+    this._downY = e.clientY;
+    this._tileEl = e.currentTarget;
+    this._levelAtDown = this._isLevelDomain() ? this._level(this._stateObj) : null;
+    try { this._tileEl.setPointerCapture(e.pointerId); } catch (x) {}
     this._holdTimer = window.setTimeout(() => {
+      if (this._dragging) return;
       this._holdFired = true;
       this._haptic("medium");
       this._runAction(this._config.hold_action);
     }, 500);
   }
 
-  _onPointerUp() {
+  _onPointerMove(e) {
+    if (!this._pressed || this._levelAtDown == null) return;
+    const dy = this._downY - e.clientY;
+    if (!this._dragging && Math.abs(dy) < 6) return;
+    this._dragging = true;
+    window.clearTimeout(this._holdTimer);
+    const rect = this._tileEl.getBoundingClientRect();
+    const pct = this._levelAtDown + (dy / rect.height) * 100;
+    this._drag = Math.max(0, Math.min(100, Math.round(pct)));
+  }
+
+  _onPointerUp(e) {
     this._pressed = false;
     window.clearTimeout(this._holdTimer);
-    if (this._holdFired) return;
-
+    try { this._tileEl && this._tileEl.releasePointerCapture(e.pointerId); } catch (x) {}
+    if (this._holdFired) { this._dragging = false; return; }
+    if (this._dragging) {
+      this._dragging = false;
+      if (this._drag != null) this._applyLevel(this._drag);
+      this._haptic("light");
+      this._drag = null;
+      return;
+    }
     // Double-tap detection.
     const now = Date.now();
     if (this._lastTap && now - this._lastTap < 250) {
@@ -531,6 +647,8 @@ class AppleHomeCard extends LitElement {
 
   _onPointerCancel() {
     this._pressed = false;
+    this._dragging = false;
+    this._drag = null;
     window.clearTimeout(this._holdTimer);
   }
 
@@ -554,32 +672,52 @@ class AppleHomeCard extends LitElement {
       `;
     }
 
+    const domain = domainOf(stateObj.entity_id);
     const on = this._isOn(stateObj);
     const unavailable = ["unavailable", "unknown"].includes(stateObj.state);
     const accent = this._accent();
     const intensity = this._intensity(stateObj);
+    const levelDomain = this._isLevelDomain();
+
+    // Fill: lights/covers fill to their level (a vertical slider); everything
+    // else tints the whole tile when on.
+    const fillH =
+      this._drag != null ? this._drag : levelDomain ? this._level(stateObj) : on ? 100 : 0;
+    const displayOn = this._drag != null ? this._drag > 0 : on;
+    const fillOpacity = levelDomain ? (fillH > 0 ? 1 : 0) : on ? intensity : 0;
+
+    const spin = domain === "fan" && displayOn;
+    const spinDur = spin
+      ? `${(1.7 - (stateObj.attributes.percentage || 60) / 100 * 1.2).toFixed(2)}s`
+      : "";
 
     const style = `
       --aha-accent: ${accent};
-      --aha-fill-opacity: ${on ? intensity : 0};
+      --aha-fill-opacity: ${fillOpacity};
+      --aha-fill-height: ${fillH}%;
     `;
+
+    const stateText =
+      this._drag != null ? `${this._drag}%` : this._stateText(stateObj);
 
     return html`
       <ha-card
         style=${style}
-        class=${[on ? "on" : "off", unavailable ? "unavailable" : ""].join(" ")}
+        class=${[displayOn ? "on" : "off", unavailable ? "unavailable" : ""].join(" ")}
       >
         <div
           class="tile"
-          data-state=${unavailable ? "unavailable" : on ? "on" : "off"}
+          data-state=${unavailable ? "unavailable" : displayOn ? "on" : "off"}
           data-pop=${this._pop || "none"}
           ?data-pressed=${this._pressed}
+          ?data-dragging=${this._dragging}
+          ?data-level=${levelDomain}
           role="button"
           tabindex="0"
           @pointerdown=${this._onPointerDown}
+          @pointermove=${this._onPointerMove}
           @pointerup=${this._onPointerUp}
           @pointercancel=${this._onPointerCancel}
-          @pointerleave=${this._onPointerCancel}
           @keydown=${(e) => {
             if (e.key === "Enter" || e.key === " ") {
               e.preventDefault();
@@ -591,6 +729,8 @@ class AppleHomeCard extends LitElement {
           <div class="content">
             <div class="badge">
               <ha-state-icon
+                class=${spin ? "spin" : ""}
+                style=${spin ? `--spin:${spinDur}` : ""}
                 .hass=${this.hass}
                 .stateObj=${stateObj}
                 .icon=${this._icon(stateObj)}
@@ -598,7 +738,7 @@ class AppleHomeCard extends LitElement {
             </div>
             <div class="info">
               <span class="name">${this._name(stateObj)}</span>
-              <span class="state">${this._stateText(stateObj)}</span>
+              <span class="state">${stateText}</span>
             </div>
           </div>
         </div>
@@ -634,12 +774,13 @@ class AppleHomeCard extends LitElement {
         overflow: visible;
       }
 
-      /* On a very small tile, keep the icon + name and drop the sub-label so
-         the circle is always visible and never crowded out. */
-      @container ahatile (max-width: 128px) {
-        .content { padding: 12px; gap: 6px; }
-        .state { display: none; }
-        .name { font-size: 14px; }
+      /* On a very small tile, shrink everything but keep the icon AND both
+         lines of text visible (they ellipsis rather than disappear). */
+      @container ahatile (max-width: 132px) {
+        .content { padding: 11px 12px; gap: 4px; }
+        .badge { width: 32px; height: 32px; --mdc-icon-size: 18px; }
+        .name { font-size: 13px; }
+        .state { font-size: 11px; }
       }
 
       /* Content scales up as the tile gets wider. */
@@ -673,7 +814,10 @@ class AppleHomeCard extends LitElement {
         transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2),
           box-shadow 0.28s ease;
         outline: none;
+        will-change: transform;
       }
+      /* Only slider tiles capture vertical drag; everything else scrolls. */
+      .tile[data-level] { touch-action: none; }
 
       .tile[data-pressed] {
         transform: scale(0.95);
@@ -685,13 +829,28 @@ class AppleHomeCard extends LitElement {
         box-shadow: 0 0 0 3px var(--aha-accent), 0 8px 24px rgba(0, 0, 0, 0.1);
       }
 
-      /* The state-driven color fill — the soul of the Apple Home look. */
+      /* The state-driven color fill — the soul of the Apple Home look.
+         Lights/covers fill to their level from the bottom (a slider); other
+         accessories fill the whole tile. */
       .fill {
         position: absolute;
-        inset: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        top: auto;
+        height: var(--aha-fill-height, 100%);
         background: var(--aha-accent);
         opacity: var(--aha-fill-opacity, 0);
-        transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: height 0.16s linear, opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      }
+      .tile[data-dragging] .fill { transition: none; }
+      .tile[data-dragging] { transform: none !important; }
+
+      /* Fan blades spin while running; faster at higher speed. */
+      @keyframes aha-fan-spin { to { transform: rotate(360deg); } }
+      .badge ha-state-icon.spin {
+        display: inline-flex;
+        animation: aha-fan-spin var(--spin, 1.1s) linear infinite;
       }
 
       .content {
@@ -982,9 +1141,28 @@ class AppleHomeSheet extends LitElement {
     `;
   }
 
+  _fmtTime(sec) {
+    if (sec == null || isNaN(sec)) return "0:00";
+    sec = Math.max(0, Math.round(sec));
+    const m = Math.floor(sec / 60);
+    const ss = String(sec % 60).padStart(2, "0");
+    return `${m}:${ss}`;
+  }
+
+  _mediaPosition(a, playing) {
+    let pos = a.media_position || 0;
+    if (playing && a.media_position_updated_at) {
+      pos += (Date.now() - new Date(a.media_position_updated_at).getTime()) / 1000;
+    }
+    return Math.min(pos, a.media_duration || pos);
+  }
+
   _renderMedia(s) {
     const a = s.attributes;
     const playing = s.state === "playing";
+    const dur = a.media_duration;
+    const pos = this._mediaPosition(a, playing);
+    const sources = a.source_list || [];
     return html`
       <div class="media">
         ${a.entity_picture
@@ -994,6 +1172,22 @@ class AppleHomeSheet extends LitElement {
             </div>`}
         <div class="media-title">${a.media_title || "Not playing"}</div>
         <div class="media-sub">${a.media_artist || a.app_name || ""}</div>
+
+        ${dur
+          ? html`<div class="scrubber">
+              <input
+                type="range" min="0" max=${Math.round(dur)} .value=${String(Math.round(pos))}
+                @change=${(e) =>
+                  this._service("media_player", "media_seek", {
+                    seek_position: Number(e.target.value),
+                  })}
+              />
+              <div class="times">
+                <span>${this._fmtTime(pos)}</span><span>${this._fmtTime(dur)}</span>
+              </div>
+            </div>`
+          : ""}
+
         <div class="transport">
           <button @click=${() => this._service("media_player", "media_previous_track")}>
             <ha-icon icon="mdi:skip-previous"></ha-icon>
@@ -1005,6 +1199,7 @@ class AppleHomeSheet extends LitElement {
             <ha-icon icon="mdi:skip-next"></ha-icon>
           </button>
         </div>
+
         <div class="control-row">
           <ha-icon icon="mdi:volume-low"></ha-icon>
           <input
@@ -1017,6 +1212,18 @@ class AppleHomeSheet extends LitElement {
           />
           <ha-icon icon="mdi:volume-high"></ha-icon>
         </div>
+
+        ${sources.length
+          ? html`<select
+              class="source"
+              @change=${(e) =>
+                this._service("media_player", "select_source", { source: e.target.value })}
+            >
+              ${sources.map(
+                (src) => html`<option ?selected=${src === a.source}>${src}</option>`
+              )}
+            </select>`
+          : ""}
       </div>
     `;
   }
@@ -1308,6 +1515,15 @@ class AppleHomeSheet extends LitElement {
       }
       .media-title { font-size: 17px; font-weight: 600; text-align: center; }
       .media-sub { font-size: 14px; color: var(--sheet-sub); margin-bottom: 8px; }
+      .scrubber { width: 100%; }
+      .scrubber input[type="range"] { width: 100%; height: 6px; border-radius: 3px; }
+      .scrubber input[type="range"]::-webkit-slider-thumb { width: 14px; height: 14px; }
+      .times { display: flex; justify-content: space-between; font-size: 12px; color: var(--sheet-sub); margin-top: 4px; }
+      .source {
+        width: 100%; margin-top: 4px; padding: 10px 12px; border-radius: 12px;
+        border: none; background: var(--sheet-control); color: #fff; font-size: 14px;
+        font-family: inherit; cursor: pointer;
+      }
 
       .transport {
         display: flex; align-items: center; justify-content: center; gap: 26px;
@@ -1388,6 +1604,10 @@ class AppleHomeMediaCard extends LitElement {
 
   getGridOptions() {
     return gridFor(this._config && this._config.size, { columns: 6, rows: 2 });
+  }
+
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(this, changed, [this._config.entity], ["_pressed"]);
   }
 
   firstUpdated() {
@@ -1472,10 +1692,23 @@ class AppleHomeMediaCard extends LitElement {
                 <ha-icon icon="mdi:skip-next"></ha-icon>
               </button>
             </div>
+            ${active && a.media_duration
+              ? html`<div class="pbar">
+                  <div class="pfill" style="width:${Math.min(100, (this._pos(a, playing) / a.media_duration) * 100).toFixed(1)}%"></div>
+                </div>`
+              : ""}
           </div>
         </div>
       </ha-card>
     `;
+  }
+
+  _pos(a, playing) {
+    let pos = a.media_position || 0;
+    if (playing && a.media_position_updated_at) {
+      pos += (Date.now() - new Date(a.media_position_updated_at).getTime()) / 1000;
+    }
+    return Math.min(pos, a.media_duration || pos);
   }
 
   static get styles() {
@@ -1483,6 +1716,11 @@ class AppleHomeMediaCard extends LitElement {
       ${GLASS_BADGE_CSS}
       :host { display: block; height: 100%; }
       ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
+      .pbar {
+        height: 3px; border-radius: 2px; margin-top: 8px;
+        background: rgba(255,255,255,0.22); overflow: hidden;
+      }
+      .pfill { height: 100%; background: #fff; border-radius: 2px; transition: width 0.3s linear; }
       .tile {
         position: relative; height: 100%; min-height: 96px;
         border-radius: 22px; overflow: hidden; cursor: pointer;
@@ -1567,6 +1805,10 @@ class AppleHomeClimateCard extends LitElement {
 
   getGridOptions() {
     return gridFor(this._config && this._config.size, { columns: 3, rows: 2 });
+  }
+
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(this, changed, [this._config.entity]);
   }
 
   firstUpdated() {
@@ -1710,6 +1952,18 @@ class AppleHomeAreaCard extends LitElement {
 
   getGridOptions() {
     return gridFor(this._config && this._config.size, { columns: 3, rows: 2 });
+  }
+
+  shouldUpdate(changed) {
+    if (changed.has("_config") || changed.has("_pressed")) return true;
+    if (changed.has("hass")) {
+      const old = changed.get("hass");
+      if (!old || !this.hass) return true;
+      return (this._config.entities || []).some(
+        (id) => old.states[id] !== this.hass.states[id]
+      );
+    }
+    return false;
   }
 
   firstUpdated() {
@@ -2156,6 +2410,10 @@ class AppleHomeWeatherCard extends LitElement {
     return gridFor(this._config && this._config.size, { columns: 6, rows: 3 });
   }
 
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(this, changed, [this._config.entity]);
+  }
+
   get _stateObj() {
     return this.hass ? this.hass.states[this._config.entity] : undefined;
   }
@@ -2335,6 +2593,10 @@ class AppleHomeGraphCard extends LitElement {
 
   getGridOptions() {
     return gridFor(this._config && this._config.size, { columns: 6, rows: 2 });
+  }
+
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(this, changed, [this._config.entity], ["_points"]);
   }
 
   connectedCallback() {
@@ -2725,6 +2987,226 @@ class AppleHomePager extends LitElement {
 
 customElements.define("apple-home-pager", AppleHomePager);
 
+// ===========================================================================
+// Group — an Apple-style container tile. Shows a summary; tap opens a frosted
+// panel containing the cards inside, for browsing/control.
+// ===========================================================================
+
+class AppleHomeGroupSheet extends LitElement {
+  static get properties() {
+    return { _open: { state: true }, _ready: { state: true } };
+  }
+  set hass(v) {
+    this._hass = v;
+    if (this._inner) this._inner.hass = v;
+  }
+  get hass() {
+    return this._hass;
+  }
+  set cardsConfig(c) {
+    this._cardsConfig = c;
+    this._build();
+  }
+  async _build() {
+    const helpers = await (window.loadCardHelpers ? window.loadCardHelpers() : HELPERS);
+    try {
+      this._inner = helpers.createCardElement(this._cardsConfig);
+    } catch (e) {
+      this._inner = document.createElement("div");
+    }
+    if (this._hass) this._inner.hass = this._hass;
+    this._ready = true;
+  }
+  show() {
+    this._open = true;
+  }
+  close() {
+    if (this._closing) return;
+    this._closing = true;
+    this._open = false;
+    window.setTimeout(() => {
+      this.dispatchEvent(new Event("sheet-closed"));
+      this.remove();
+    }, 320);
+  }
+  render() {
+    return html`
+      <div
+        class="backdrop ${this._open ? "open" : ""}"
+        @click=${(e) => { if (e.target === e.currentTarget) this.close(); }}
+      >
+        <div class="sheet ${this._open ? "open" : ""}" style="--sheet-accent:${this.accent || "#0a84ff"}">
+          <div class="grabber"></div>
+          <div class="head">
+            <span class="title">${this.heading || "Group"}</span>
+            <button class="close" @click=${() => this.close()}>
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div class="content">${this._inner || ""}</div>
+        </div>
+      </div>
+    `;
+  }
+  static get styles() {
+    return css`
+      :host { font-family: ${FONT_STACK_CSS}; }
+      .backdrop {
+        position: fixed; inset: 0; z-index: 9999; display: flex;
+        align-items: flex-end; justify-content: center;
+        background: rgba(0, 0, 0, 0); transition: background 0.3s ease;
+      }
+      .backdrop.open { background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(2px); }
+      .sheet {
+        width: 100%; max-width: 540px; margin: 0 8px; box-sizing: border-box;
+        max-height: 86vh; overflow-y: auto;
+        background: rgba(28, 28, 30, 0.82);
+        backdrop-filter: blur(40px) saturate(180%);
+        -webkit-backdrop-filter: blur(40px) saturate(180%);
+        color: #fff; border-radius: 28px 28px 0 0; padding: 10px 18px 20px;
+        transform: translateY(110%);
+        transition: transform 0.36s cubic-bezier(0.2, 0.9, 0.3, 1);
+        box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.4);
+      }
+      @media (min-width: 600px) {
+        .backdrop { align-items: center; }
+        .sheet { border-radius: 28px; }
+      }
+      .sheet.open { transform: translateY(0); }
+      .grabber { width: 38px; height: 5px; border-radius: 3px; background: rgba(235,235,245,0.3); margin: 6px auto 12px; }
+      .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+      .title { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+      .close { width: 30px; height: 30px; border: none; border-radius: 50%; background: rgba(120,120,128,0.32); color: rgba(235,235,245,0.6); display: grid; place-items: center; cursor: pointer; --mdc-icon-size: 18px; }
+    `;
+  }
+}
+customElements.define("apple-home-group-sheet", AppleHomeGroupSheet);
+
+class AppleHomeGroup extends LitElement {
+  static get properties() {
+    return { _config: { state: true }, _pressed: { state: true } };
+  }
+  static getStubConfig() {
+    return { name: "Group", icon: "mdi:dots-grid", cards: [] };
+  }
+  setConfig(config) {
+    if (!config.cards && !config.entities) {
+      throw new Error("Define `cards` (and optionally `entities` for the summary)");
+    }
+    this._config = { columns: 2, ...config };
+  }
+  set hass(v) {
+    const old = this._hass;
+    this._hass = v;
+    if (this._sheet) this._sheet.hass = v;
+    if (!old || (this._config && this._entityIds().some((id) => old.states[id] !== v.states[id]))) {
+      this.requestUpdate();
+    }
+  }
+  get hass() {
+    return this._hass;
+  }
+  getCardSize() {
+    return 1;
+  }
+  getGridOptions() {
+    return gridFor(this._config && this._config.size, { columns: 3, rows: 2 });
+  }
+  _entityIds() {
+    if (this._config.entities) return this._config.entities;
+    return (this._config.cards || []).map((c) => c.entity).filter(Boolean);
+  }
+  _summary() {
+    if (!this._hass) return "";
+    const states = this._entityIds().map((i) => this._hass.states[i]).filter(Boolean);
+    const total = states.length;
+    const on = states.filter(isEntityOn).length;
+    if (!total) return `${(this._config.cards || []).length} items`;
+    if (on === 0) return "All off";
+    if (on === total) return total === 1 ? "On" : "All on";
+    return `${on} of ${total} on`;
+  }
+  _open() {
+    if (this._sheet) return;
+    const el = document.createElement("apple-home-group-sheet");
+    el.hass = this._hass;
+    el.heading = this._config.name || "Group";
+    el.accent = this._config.color || "#0a84ff";
+    el.cardsConfig = { type: "grid", columns: this._config.columns || 2, square: false, cards: this._config.cards || [] };
+    el.addEventListener("sheet-closed", () => (this._sheet = undefined));
+    document.body.appendChild(el);
+    this._sheet = el;
+    requestAnimationFrame(() => el.show());
+  }
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".badge");
+    LightField.register(this._badge);
+  }
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._badge) LightField.unregister(this._badge);
+    if (this._sheet) this._sheet.close();
+  }
+  render() {
+    if (!this._config || !this._hass) return html``;
+    const on = this._hass && this._entityIds().some((id) => isEntityOn(this._hass.states[id]));
+    const accent = this._config.color || "#0a84ff";
+    return html`
+      <ha-card style="--accent:${accent}">
+        <div
+          class="tile ${on ? "on" : "off"}"
+          ?data-pressed=${this._pressed}
+          @pointerdown=${() => (this._pressed = true)}
+          @pointerup=${() => { this._pressed = false; this._open(); }}
+          @pointerleave=${() => (this._pressed = false)}
+        >
+          <div class="badge"><ha-icon icon=${this._config.icon || "mdi:dots-grid"}></ha-icon></div>
+          <div class="info">
+            <span class="name">${this._config.name || "Group"}</span>
+            <span class="sub">${this._summary()}</span>
+          </div>
+          <ha-icon class="chev" icon="mdi:chevron-right"></ha-icon>
+        </div>
+      </ha-card>
+    `;
+  }
+  static get styles() {
+    return css`
+      ${GLASS_BADGE_CSS}
+      :host { display: block; height: 100%; container-type: inline-size; container-name: ahatile; }
+      ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
+      .tile {
+        position: relative; height: 100%; min-height: 84px; box-sizing: border-box;
+        border-radius: 22px; padding: 14px 16px; cursor: pointer;
+        display: flex; flex-direction: column; justify-content: space-between; gap: 10px;
+        background: var(--aha-tile-background, rgba(120,120,128,0.16));
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.1);
+        transition: transform 0.28s cubic-bezier(0.2,0.9,0.3,1.2);
+        will-change: transform;
+      }
+      .tile[data-pressed] { transform: scale(0.95); }
+      .badge {
+        width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center;
+        --mdc-icon-size: 20px; background: var(--accent); color: #fff;
+      }
+      .info { display: flex; flex-direction: column; min-width: 0; }
+      .name {
+        font-weight: 600; font-size: 15px; letter-spacing: -0.01em; color: var(--primary-text-color);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .sub { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); }
+      .chev { position: absolute; top: 14px; right: 12px; color: var(--secondary-text-color); --mdc-icon-size: 20px; }
+      @container ahatile (max-width: 132px) {
+        .name { font-size: 13px; } .sub { font-size: 11px; }
+        .badge { width: 32px; height: 32px; --mdc-icon-size: 18px; }
+      }
+    `;
+  }
+}
+customElements.define("apple-home-group", AppleHomeGroup);
+
 // --- GUI editor ------------------------------------------------------------
 
 class AppleHomeCardEditor extends LitElement {
@@ -2849,6 +3331,13 @@ window.customCards.push(
     type: "apple-home-pager",
     name: "Apple Home Pager",
     description: "iPhone-style swipeable pages of cards, one room per page, with page dots.",
+    preview: false,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-group",
+    name: "Apple Home Group",
+    description: "A container tile that opens into a frosted panel of the cards inside.",
     preview: false,
     documentationURL: DOCS_URL,
   }
