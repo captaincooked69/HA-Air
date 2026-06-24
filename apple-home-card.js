@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.8.0";
+const VERSION = "0.8.1";
 
 /* eslint-disable no-console */
 console.info(
@@ -2595,6 +2595,7 @@ class AppleHomePager extends LitElement {
         {
           type: "grid",
           columns: page.columns || this._config.columns || 2,
+          square: false, // tiles size to content, not big squares
           cards: page.cards || [],
         };
       let el;
