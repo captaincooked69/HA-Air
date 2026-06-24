@@ -16,6 +16,7 @@ An Apple Home–inspired tile card for [Home Assistant](https://www.home-assista
 - 💎 **Reactive glass icons** — one shared light source (your pointer) sweeps a specular highlight across every icon at once, so neighbouring icons catch the light together; a static frosted sheen keeps them glassy at rest.
 - ✨ **Subtle motion** — spring press, a gentle badge "pop" and icon spin on state change, scene pulses — all quiet, all respecting `prefers-reduced-motion`.
 - 🌌 **Geometric/glass backgrounds** — a full-dashboard backdrop with six presets (aurora, sunset, ocean, midnight, mesh, mono) and an inline selector.
+- 📲 **Swipe pager** — iPhone-style swipeable pages, one room per page, with page dots.
 - 👆 **Native interactions** — tap toggles, hold opens the detail sheet, double-tap configurable; haptics on supported devices; scenes/scripts pulse on activation.
 - 🎛️ **GUI editor** — full visual config in the dashboard editor, no YAML required.
 - 🌗 **Light & dark** — ships with a companion theme tuned for both.
@@ -51,6 +52,7 @@ The package ships four cards, all sharing the same frosted look and the detail s
 | `custom:apple-home-weather-card` | `weather` | Condition + temperature + forecast strip; condition-aware gradient. |
 | `custom:apple-home-graph-card` | numeric `sensor` | Current value + sparkline of recent history. |
 | `custom:apple-home-background` | The whole dashboard | Full-screen geometric/glass backdrop + a preset selector. |
+| `custom:apple-home-pager` | A container of cards | iPhone-style swipeable pages (one room per page) with page dots. |
 
 ## Usage
 
@@ -138,6 +140,31 @@ same way, because each tile is a CSS size container.
 
 The graph tile pulls history from Home Assistant's recorder, so the sensor must be recorded
 (most are by default). Colour is inferred for temperature / humidity / PM2.5 / VOC, or set it.
+
+### Swipe pager
+
+An iPhone-style paged container — swipe between rooms with snapping + page dots. Each page
+wraps its cards in a 2-column grid by default. Use it on a **panel** view for an edge-to-edge,
+full-screen feel.
+
+```yaml
+type: custom:apple-home-pager
+columns: 2
+pages:
+  - title: Living Room
+    cards:
+      - type: custom:apple-home-card
+        entity: light.living_room
+      - type: custom:apple-home-media-card
+        entity: media_player.sonos
+  - title: Bedroom
+    cards:
+      - type: custom:apple-home-card
+        entity: light.bedroom
+  # Full control per page: pass `card:` instead of `cards:` for any single card/stack.
+```
+
+See [`examples/pager.yaml`](examples/pager.yaml) for a full multi-room panel view.
 
 ### Example
 

@@ -1,0 +1,81 @@
+# iPhone-style swipe pager — one room per page, swipe horizontally.
+#
+# Add this as a NEW VIEW on a dashboard. A `type: panel` view shows a single
+# card filling the screen, which makes the pager feel full-screen like an
+# iPhone home screen. Paste under your dashboard's `views:` list.
+#
+# Tip: the pager works on a normal (Masonry) view too — panel just makes it
+# edge-to-edge. Each page wraps its cards in a 2-column grid by default;
+# set `columns:` per page to change it.
+
+views:
+  - title: Rooms
+    path: swipe
+    type: panel
+    cards:
+      - type: custom:apple-home-pager
+        columns: 2
+        pages:
+          - title: Living Room
+            cards:
+              - type: custom:apple-home-card
+                entity: light.living_room_1
+                name: Ceiling
+              - type: custom:apple-home-card
+                entity: light.living_room_lamp
+                name: Lamp
+              - type: custom:apple-home-card
+                entity: light.canvas_281d
+                name: Nanoleaf
+                color: "#bf5af2"
+              - type: custom:apple-home-card
+                entity: switch.christmas_tree
+                name: Tree
+                icon: mdi:pine-tree
+                color: "#30d158"
+              - type: custom:apple-home-media-card
+                entity: media_player.arc
+                name: Sonos Arc
+              - type: custom:apple-home-card
+                entity: media_player.living_room_tv
+                name: TV
+                icon: mdi:television
+
+          - title: Bedroom
+            cards:
+              - type: custom:apple-home-card
+                entity: light.bedroom
+                name: Lights
+              - type: custom:apple-home-card
+                entity: scene.bedroom_bright
+                name: Bright
+                icon: mdi:white-balance-sunny
+              - type: custom:apple-home-card
+                entity: scene.bedroom_dim
+                name: Dim
+                icon: mdi:weather-night
+                color: "#5e5ce6"
+              - type: custom:apple-home-media-card
+                entity: media_player.bedroom_home_assistant_voice_0a95d7
+                name: Speaker
+
+          - title: Outdoor
+            cards:
+              - type: custom:apple-home-card
+                entity: switch.backyard_light
+                name: Backyard
+              - type: custom:apple-home-card
+                entity: cover.garagedoor
+                name: Garage
+                icon: mdi:garage
+              - type: custom:apple-home-card
+                entity: binary_sensor.backyard_motion_detected
+                name: Motion
+                icon: mdi:motion-sensor
+              - type: custom:apple-home-media-card
+                entity: media_player.patio
+                name: Patio Sonos
+              - type: custom:apple-home-weather-card
+                entity: weather.forecast_home
+                name: Home
+                size: large

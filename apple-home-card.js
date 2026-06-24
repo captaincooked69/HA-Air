@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 
 /* eslint-disable no-console */
 console.info(
@@ -2545,6 +2545,185 @@ class AppleHomeGraphCard extends LitElement {
 
 customElements.define("apple-home-graph-card", AppleHomeGraphCard);
 
+// ===========================================================================
+// Pager — an iPhone-style swipeable, paged container. Each page is a room (or
+// any group of cards); swipe horizontally with snap + page dots.
+// ===========================================================================
+
+class AppleHomePager extends LitElement {
+  static get properties() {
+    return { _config: { state: true }, _cards: { state: true }, _page: { state: true } };
+  }
+
+  static getStubConfig() {
+    return {
+      pages: [
+        { title: "Room 1", cards: [] },
+        { title: "Room 2", cards: [] },
+      ],
+    };
+  }
+
+  set hass(v) {
+    this._hass = v;
+    if (this._cards) this._cards.forEach((c) => c && (c.hass = v));
+  }
+  get hass() {
+    return this._hass;
+  }
+
+  setConfig(config) {
+    if (!config.pages || !config.pages.length) {
+      throw new Error("You must define at least one page");
+    }
+    this._config = config;
+    this._page = 0;
+    this._buildCards();
+  }
+
+  getCardSize() {
+    return 8;
+  }
+
+  async _buildCards() {
+    const helpers = await (window.loadCardHelpers
+      ? window.loadCardHelpers()
+      : HELPERS);
+    this._cards = this._config.pages.map((page) => {
+      const conf =
+        page.card ||
+        {
+          type: "grid",
+          columns: page.columns || this._config.columns || 2,
+          cards: page.cards || [],
+        };
+      let el;
+      try {
+        el = helpers.createCardElement(conf);
+      } catch (e) {
+        el = helpers.createErrorCard
+          ? helpers.createErrorCard({ type: "error", error: String(e), origConfig: conf })
+          : document.createElement("div");
+      }
+      if (this._hass) el.hass = this._hass;
+      el.addEventListener("ll-rebuild", (ev) => {
+        ev.stopPropagation();
+        this._buildCards();
+      });
+      return el;
+    });
+    this.requestUpdate();
+  }
+
+  firstUpdated() {
+    this._track = this.renderRoot.querySelector(".track");
+  }
+
+  _onScroll() {
+    if (!this._track) return;
+    const i = Math.round(this._track.scrollLeft / this._track.clientWidth);
+    if (i !== this._page) this._page = i;
+  }
+
+  _goto(i) {
+    if (!this._track) return;
+    this._track.scrollTo({ left: this._track.clientWidth * i, behavior: "smooth" });
+  }
+
+  render() {
+    if (!this._config) return html``;
+    const pages = this._config.pages;
+    const showDots = this._config.show_dots !== false && pages.length > 1;
+    return html`
+      <div class="pager">
+        <div class="track" @scroll=${this._onScroll}>
+          ${pages.map(
+            (p, i) => html`
+              <div class="page">
+                ${p.title
+                  ? html`<div class="ptitle">
+                      ${p.icon ? html`<ha-icon icon=${p.icon}></ha-icon>` : ""}
+                      <span>${p.title}</span>
+                    </div>`
+                  : ""}
+                <div class="pbody">${this._cards ? this._cards[i] : ""}</div>
+              </div>
+            `
+          )}
+        </div>
+        ${showDots
+          ? html`<div class="dots">
+              ${pages.map(
+                (_, i) => html`<button
+                  class="dot ${i === this._page ? "active" : ""}"
+                  aria-label="Page ${i + 1}"
+                  @click=${() => this._goto(i)}
+                ></button>`
+              )}
+            </div>`
+          : ""}
+      </div>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host { display: block; }
+      .pager { width: 100%; }
+      .track {
+        display: flex;
+        overflow-x: auto;
+        scroll-snap-type: x mandatory;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+      }
+      .track::-webkit-scrollbar { display: none; }
+      .page {
+        flex: 0 0 100%;
+        scroll-snap-align: center;
+        box-sizing: border-box;
+        padding: 0 2px;
+      }
+      .ptitle {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: ${FONT_STACK_CSS};
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+        color: var(--primary-text-color);
+        margin: 2px 6px 14px;
+        --mdc-icon-size: 24px;
+      }
+      .dots {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+        margin-top: 16px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: var(--disabled-text-color, rgba(127, 127, 127, 0.4));
+        cursor: pointer;
+        transition: width 0.3s ease, border-radius 0.3s ease,
+          background 0.3s ease;
+      }
+      .dot.active {
+        width: 22px;
+        border-radius: 4px;
+        background: var(--primary-color, #0a84ff);
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-pager", AppleHomePager);
+
 // --- GUI editor ------------------------------------------------------------
 
 class AppleHomeCardEditor extends LitElement {
@@ -2663,6 +2842,13 @@ window.customCards.push(
     name: "Apple Home Graph",
     description: "Current value + sparkline history for temperature, humidity, air quality, etc.",
     preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-pager",
+    name: "Apple Home Pager",
+    description: "iPhone-style swipeable pages of cards, one room per page, with page dots.",
+    preview: false,
     documentationURL: DOCS_URL,
   }
 );
