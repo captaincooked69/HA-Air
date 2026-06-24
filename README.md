@@ -1,8 +1,8 @@
-# Apple Home Card
+# Air HA Dashboard
 
-An Apple Home–inspired tile card for [Home Assistant](https://www.home-assistant.io/). Turns ordinary lights, switches, covers, locks and sensors into rounded frosted-glass tiles that **fill with color when they're on** — the signature Apple Home look — with tap-to-toggle, hold-for-details, and a brightness-aware fill.
+An tile card for [Home Assistant](https://www.home-assistant.io/). Turns ordinary lights, switches, covers, locks and sensors into rounded frosted-glass tiles that **fill with color when they're on** — the signature look — with tap-to-toggle, hold-for-details, and a brightness-aware fill.
 
-![Apple Home Card](docs/preview.png)
+![Home Card](docs/preview.png)
 
 > Status: **v0.1.0** — early but usable. Feedback and PRs welcome.
 
@@ -11,7 +11,6 @@ An Apple Home–inspired tile card for [Home Assistant](https://www.home-assista
 - 🟦 **State-driven color fill** — tiles tint to an accent when active.
 - 🎚️ **Drag to dim** — drag up/down on a light tile to set brightness (or a cover tile for position); tap toggles, hold opens controls.
 - ⚡ **Snappy** — each tile only re-renders when its own entity changes, and toggles flip optimistically (no waiting on the round-trip).
-- 🍏 **Apple-style tile language** — big corner radius, frosted backdrop, circular icon badge, soft depth.
 - 🎚️ **Detail sheet ("delve in")** — tap-and-hold slides up a frosted control panel: a big draggable brightness slider with color + temperature for lights, media transport + volume, cover position, climate +/-, vacuum controls. Falls through to full HA settings.
 - 🌤️ **Weather & graph tiles** — a pretty condition-aware weather tile with a forecast strip, and sparkline graph tiles for temperature/humidity/air-quality sensors.
 - 🔭 **Scalable tiles** — `size: small → hero`, and the contents auto-scale to the cell via container queries, so they look right whether you set a size or drag-resize in the UI. The icon circle stays visible at every size.
@@ -109,7 +108,7 @@ Tap opens a dedicated vacuum sheet with start/pause, dock, locate, and optional 
 ### Fan tile
 
 ```yaml
-type: custom:apple-home-fan-card
+type: custom:-home-fan-card
 entity: fan.bedroom
 name: Bedroom Fan
 ```
@@ -117,7 +116,7 @@ name: Bedroom Fan
 ### Status chips
 
 ```yaml
-type: custom:apple-home-chip
+type: custom:-home-chip
 entity: sensor.rocky_battery
 name: Battery
 icon: mdi:battery
@@ -132,7 +131,7 @@ Drop one of these anywhere on a dashboard. It paints a full-screen backdrop behi
 **every** view and (optionally) shows a preset picker. The choice is saved per-browser.
 
 ```yaml
-type: custom:apple-home-background
+type: custom:-home-background
 background: aurora      # aurora · sunset · ocean · midnight · mesh · mono
 selector: true          # show the inline preset picker
 ```
@@ -158,7 +157,7 @@ it with the companion theme for the cleanest result. Both the backdrop drift and
 ### Sizing
 
 ```yaml
-- type: custom:apple-home-card
+- type: custom:-home-card
   entity: weather.home
   size: large        # small · medium · large · wide · hero
 ```
@@ -170,20 +169,20 @@ same way, because each tile is a CSS size container.
 ### Weather & graph tiles
 
 ```yaml
-- type: custom:apple-home-weather-card
+- type: custom:-home-weather-card
   entity: weather.home
   size: large
   forecast_days: 7 # optional, defaults to 7
   animated: true   # optional, disable to turn off weather motion
 
-- type: custom:apple-home-graph-card
+- type: custom:-home-graph-card
   entity: sensor.living_room_temperature
   name: Temperature
   hours: 24          # how much history to plot
   # color: "#ff9f0a" # optional; otherwise inferred from device_class
 ```
 
-`custom:apple-home-weather-card` supports the same `size` values as the main tile.
+`custom:-home-weather-card` supports the same `size` values as the main tile.
 If your weather entity does not expose a `forecast` attribute, the card falls back to Home Assistant's live forecast subscription automatically.
 
 The graph tile pulls history from Home Assistant's recorder, so the sensor must be recorded
