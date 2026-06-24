@@ -84,11 +84,23 @@ const DOMAIN_ACCENT = {
 function domainOf(entityId) {
   return entityId ? entityId.split(".")[0] : "";
 }
+function composedClosest(node, selector) {
+  let current = node;
+  while (current) {
+    if (typeof current.closest === "function") {
+      const found = current.closest(selector);
+      if (found) return found;
+    }
+    const root = typeof current.getRootNode === "function" ? current.getRootNode() : null;
+    current = root && root.host ? root.host : null;
+  }
+  return null;
+}
+
 function isDashboardViewHost(host) {
-  return !!(
-    host &&
-    typeof host.closest === "function" &&
-    host.closest("hui-view, hui-panel-view, hui-sections-view, hui-masonry-view")
+  return !!composedClosest(
+    host,
+    "hui-view, hui-panel-view, hui-sections-view, hui-masonry-view"
   );
 }
 // Re-render only when one of the given entities actually changed (plus any
@@ -1547,7 +1559,7 @@ class AppleHomeSheet extends LitElement {
           <div class="grabber"></div>
           <div class="head">
             <span class="title">${name}</span>
-            <button class="close" @click=${() => this.close()}>
+            <button class="close" aria-label="Close" title="Close" @click=${() => this.close()}>
               <ha-icon icon="mdi:close"></ha-icon>
             </button>
           </div>
@@ -2324,7 +2336,11 @@ class AppleHomeAreaCard extends LitElement {
       .name {
         font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
         color: var(--primary-text-color);
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        white-space: normal;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
       }
       .sub { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); }
       .tile.on .name, .tile.on .sub { color: #1c1c1e; }
@@ -2508,23 +2524,22 @@ class AppleHomeBackground extends LitElement {
 
   _select(key) {
     const doc = this.ownerDocument || document;
-    if (isDashboardViewHost(this)) applyBackground(key, doc);
+    if (!doc || !doc.head || !doc.body) return;
+    applyBackground(key, doc);
     this.requestUpdate();
   }
-
   updated(changed) {
     if (changed.has("_config")) this._syncBackground();
   }
 
   _syncBackground() {
     const doc = this.ownerDocument || document;
-    if (!isDashboardViewHost(this) || !doc || !doc.head || !doc.body) return;
+    if (!doc || !doc.head || !doc.body) return;
     applyBackground(
       currentBackgroundKey() || (this._config && this._config.background) || "aurora",
       doc
     );
   }
-
   render() {
     if (!this._config || !this._config.selector) return html``;
     const cur = currentBackgroundKey() || this._config.background;
@@ -2650,7 +2665,11 @@ const WEATHER_GRADIENT = {
 
 class AppleHomeWeatherCard extends LitElement {
   static get properties() {
-    return { hass: {}, _config: { state: true } };
+    return {
+      hass: {},
+      _config: { state: true },
+      _forecastData: { state: true },
+    };
   }
 
   static getStubConfig(hass) {
@@ -2663,6 +2682,24 @@ class AppleHomeWeatherCard extends LitElement {
     this._config = { forecast_days: 7, animated: true, ...config };
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    this._syncForecastSubscription();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this._forecastSubscriptionKey = undefined;
+    if (this._unsubscribeForecast) {
+      this._unsubscribeForecast();
+      this._unsubscribeForecast = undefined;
+    }
+  }
+
+  updated(changed) {
+    if (changed.has("hass") || changed.has("_config")) this._syncForecastSubscription();
+  }
+
   getCardSize() {
     return 3;
   }
@@ -2672,11 +2709,58 @@ class AppleHomeWeatherCard extends LitElement {
   }
 
   shouldUpdate(changed) {
-    return onlyIfEntitiesChanged(this, changed, [this._config.entity]);
+    return onlyIfEntitiesChanged(this, changed, [this._config.entity], ["_forecastData"]);
   }
 
   get _stateObj() {
     return this.hass ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  _preferredForecastType() {
+    const s = this._stateObj;
+    const features = Number((s && s.attributes.supported_features) || 0);
+    if (features & 1) return "daily";
+    if (features & 4) return "twice_daily";
+    if (features & 2) return "hourly";
+    return undefined;
+  }
+
+  _syncForecastSubscription() {
+    const entityId = this._config && this._config.entity;
+    const forecastType = this._preferredForecastType();
+    const key = entityId && forecastType ? `${entityId}:${forecastType}` : "";
+    if (key === this._forecastSubscriptionKey) return;
+
+    this._forecastSubscriptionKey = key;
+    this._forecastData = undefined;
+    if (this._unsubscribeForecast) {
+      this._unsubscribeForecast();
+      this._unsubscribeForecast = undefined;
+    }
+    if (!this.hass || !this.hass.connection || !entityId || !forecastType) return;
+
+    const token = key;
+    Promise.resolve(
+      this.hass.connection.subscribeMessage(
+        (event) => {
+          if (this._forecastSubscriptionKey !== token) return;
+          this._forecastData = event && Array.isArray(event.forecast) ? event.forecast : [];
+        },
+        {
+          type: "weather/subscribe_forecast",
+          entity_id: entityId,
+          forecast_type: forecastType,
+        }
+      )
+    )
+      .then((unsubscribe) => {
+        if (this._forecastSubscriptionKey !== token) {
+          if (typeof unsubscribe === "function") unsubscribe();
+          return;
+        }
+        this._unsubscribeForecast = typeof unsubscribe === "function" ? unsubscribe : undefined;
+      })
+      .catch(() => {});
   }
 
   _unit() {
@@ -2684,9 +2768,10 @@ class AppleHomeWeatherCard extends LitElement {
     return (
       (s && s.attributes.temperature_unit) ||
       (this.hass && this.hass.config.unit_system.temperature) ||
-      "°"
+      String.fromCharCode(176)
     );
   }
+
 
   _round(n) {
     return n == null || isNaN(n) ? null : Math.round(n);
@@ -2696,7 +2781,12 @@ class AppleHomeWeatherCard extends LitElement {
     const s = this._stateObj;
     const days = Math.max(0, Math.min(7, Number(this._config.forecast_days ?? 7) || 0));
     if (!s || !days) return [];
-    const raw = Array.isArray(s.attributes.forecast) ? s.attributes.forecast : [];
+    const raw =
+      Array.isArray(this._forecastData) && this._forecastData.length
+        ? this._forecastData
+        : Array.isArray(s.attributes.forecast)
+          ? s.attributes.forecast
+          : [];
     return raw.slice(0, days);
   }
 
@@ -2714,7 +2804,6 @@ class AppleHomeWeatherCard extends LitElement {
     if (cond === "sunny") return "sunny";
     return "calm";
   }
-
   render() {
     if (!this._config || !this.hass) return html``;
     const s = this._stateObj;
@@ -3093,12 +3182,29 @@ class AppleHomeGraphCard extends LitElement {
     const spanV = maxV - minV || 1;
     const X = (t) => ((t - minX) / spanX) * w;
     const Y = (v) => pad + (1 - (v - minV) / spanV) * (h - pad * 2);
-    const line = pts
-      .map((p, i) => `${i ? "L" : "M"}${X(p.t).toFixed(1)} ${Y(p.v).toFixed(1)}`)
-      .join(" ");
-    const area = `${line} L${w} ${h} L0 ${h} Z`;
+    const coords = pts.map((p) => ({ x: X(p.t), y: Y(p.v) }));
+    let line = `M${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
+    if (coords.length === 2) {
+      line += ` L${coords[1].x.toFixed(1)} ${coords[1].y.toFixed(1)}`;
+    } else {
+      for (let i = 0; i < coords.length - 1; i += 1) {
+        const p0 = coords[Math.max(0, i - 1)];
+        const p1 = coords[i];
+        const p2 = coords[i + 1];
+        const p3 = coords[Math.min(coords.length - 1, i + 2)];
+        const cp1x = p1.x + (p2.x - p0.x) / 6;
+        const cp1y = p1.y + (p2.y - p0.y) / 6;
+        const cp2x = p2.x - (p3.x - p1.x) / 6;
+        const cp2y = p2.y - (p3.y - p1.y) / 6;
+        line += ` C${cp1x.toFixed(1)} ${cp1y.toFixed(1)} ${cp2x.toFixed(1)} ${cp2y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+      }
+    }
+    const first = coords[0];
+    const last = coords[coords.length - 1];
+    const area = `${line} L${last.x.toFixed(1)} ${h} L${first.x.toFixed(1)} ${h} Z`;
     return { line, area, minV, maxV };
   }
+
   render() {
     if (!this._config || !this.hass) return html``;
     const s = this._stateObj;
@@ -3269,6 +3375,7 @@ class AppleHomeVacuumSheet extends LitElement {
       statusEntity: {},
       actions: {},
       _open: { state: true },
+      _selectedActionKey: { state: true },
     };
   }
 
@@ -3344,6 +3451,28 @@ class AppleHomeVacuumSheet extends LitElement {
     return Array.isArray(this.actions) ? this.actions : [];
   }
 
+  _wholeHouseKey() {
+    return "__whole_house__";
+  }
+
+  _actionKey(action, index) {
+    return (
+      action.id ||
+      action.key ||
+      action.entity ||
+      action.entity_id ||
+      action.label ||
+      `action-${index}`
+    );
+  }
+
+  _selectedAction() {
+    const selectedKey = this._selectedActionKey || this._wholeHouseKey();
+    return this._actionConfigs().find(
+      (action, index) => this._actionKey(action, index) === selectedKey
+    );
+  }
+
   _actionLabel(action) {
     if (action.label) return action.label;
     const entityId = action.entity || action.entity_id;
@@ -3353,6 +3482,48 @@ class AppleHomeVacuumSheet extends LitElement {
 
   _actionIcon(action) {
     return action.icon || "mdi:floor-plan";
+  }
+
+  _selectAction(key) {
+    this._selectedActionKey = key;
+  }
+
+  _emitVacuumAction(detail) {
+    this.dispatchEvent(
+      new CustomEvent("vacuum-action", {
+        detail,
+        bubbles: true,
+        composed: true,
+      })
+    );
+  }
+
+  _runPrimaryAction() {
+    const primary = this._primaryAction();
+    const selectedAction = this._selectedAction();
+    const roomLabel = selectedAction ? this._actionLabel(selectedAction) : "Whole House";
+
+    if (primary.service === "start" && selectedAction) {
+      callConfiguredAction(this.hass, selectedAction);
+      this._emitVacuumAction({ status: "cleaning", roomLabel });
+      this.close();
+      return;
+    }
+
+    this._service(primary.service);
+    if (primary.service === "start") {
+      this._emitVacuumAction({ status: "cleaning", roomLabel });
+      this.close();
+      return;
+    }
+    if (primary.service === "pause") {
+      this._emitVacuumAction({ status: "paused" });
+    }
+  }
+
+  _sendToDock() {
+    this._service("return_to_base");
+    this._emitVacuumAction({ status: "returning" });
   }
 
   _renderStatusPill(label, value, accent) {
@@ -3368,6 +3539,12 @@ class AppleHomeVacuumSheet extends LitElement {
     const returning = s && s.state === "returning";
     const name = this.heading || getEntityDisplayName(s, this.entityId);
     const quickActions = this._actionConfigs();
+    const selectedKey = this._selectedActionKey || this._wholeHouseKey();
+    const selectedAction = this._selectedAction();
+    const primaryLabel =
+      primary.service === "start" && selectedAction
+        ? `${primary.label} ${this._actionLabel(selectedAction)}`
+        : primary.label;
     const subtitle = cleaning
       ? "Cleaning is in progress."
       : returning
@@ -3382,7 +3559,7 @@ class AppleHomeVacuumSheet extends LitElement {
           <div class="grabber"></div>
           <div class="head">
             <span class="title">${name}</span>
-            <button class="close" @click=${() => this.close()}>
+            <button class="close" aria-label="Close" title="Close" @click=${() => this.close()}>
               <ha-icon icon="mdi:close"></ha-icon>
             </button>
           </div>
@@ -3405,27 +3582,35 @@ class AppleHomeVacuumSheet extends LitElement {
 
           <div class="section-title">Controls</div>
           <div class="grid-btns primary-grid">
-            <button @click=${() => this._service(primary.service)}>
+            <button @click=${() => this._runPrimaryAction()}>
               <ha-icon icon=${primary.icon}></ha-icon>
-              <span>${primary.label}</span>
+              <span>${primaryLabel}</span>
             </button>
-            <button @click=${() => this._service("return_to_base")}>
+            <button @click=${() => this._sendToDock()}>
               <ha-icon icon="mdi:home-import-outline"></ha-icon>
               <span>Dock</span>
-            </button>
-            <button @click=${() => this._service("locate")}>
-              <ha-icon icon="mdi:map-marker"></ha-icon>
-              <span>Locate</span>
             </button>
           </div>
 
           ${quickActions.length
             ? html`
-                <div class="section-title">Quick Rooms</div>
+                <div class="section-title">Where to Clean</div>
                 <div class="action-grid">
+                  <button
+                    class="room-action ${selectedKey === this._wholeHouseKey() ? "selected" : ""}"
+                    aria-pressed=${selectedKey === this._wholeHouseKey() ? "true" : "false"}
+                    @click=${() => this._selectAction(this._wholeHouseKey())}
+                  >
+                    <ha-icon icon="mdi:home-floor-0"></ha-icon>
+                    <span>Whole House</span>
+                  </button>
                   ${quickActions.map(
-                    (action) => html`
-                      <button class="room-action" @click=${() => callConfiguredAction(this.hass, action)}>
+                    (action, index) => html`
+                      <button
+                        class="room-action ${selectedKey === this._actionKey(action, index) ? "selected" : ""}"
+                        aria-pressed=${selectedKey === this._actionKey(action, index) ? "true" : "false"}
+                        @click=${() => this._selectAction(this._actionKey(action, index))}
+                      >
                         <ha-icon icon=${this._actionIcon(action)}></ha-icon>
                         <span>${this._actionLabel(action)}</span>
                       </button>
@@ -3623,7 +3808,7 @@ class AppleHomeVacuumSheet extends LitElement {
       }
       .grid-btns {
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
       }
       .grid-btns button,
@@ -3666,6 +3851,12 @@ class AppleHomeVacuumSheet extends LitElement {
         background:
           linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03)),
           rgba(255, 255, 255, 0.06);
+      }
+      .room-action.selected {
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.06)),
+          color-mix(in srgb, var(--sheet-accent) 36%, rgba(255, 255, 255, 0.12));
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,0.18);
       }
       .room-action span {
         font-size: 14px;
@@ -3731,6 +3922,8 @@ class AppleHomeVacuumCard extends LitElement {
       _config: { state: true },
       _pressed: { state: true },
       _pop: { state: true },
+      _pendingStatus: { state: true },
+      _pendingRoomLabel: { state: true },
     };
   }
 
@@ -3745,7 +3938,12 @@ class AppleHomeVacuumCard extends LitElement {
   }
 
   shouldUpdate(changed) {
-    return onlyIfEntitiesChanged(this, changed, this._entityIds(), ["_pressed", "_pop"]);
+    return onlyIfEntitiesChanged(this, changed, this._entityIds(), [
+      "_pressed",
+      "_pop",
+      "_pendingStatus",
+      "_pendingRoomLabel",
+    ]);
   }
 
   updated(changed) {
@@ -3759,6 +3957,12 @@ class AppleHomeVacuumCard extends LitElement {
       this._popTimer = window.setTimeout(() => (this._pop = null), 650);
     }
     this._prevCleaning = cleaning;
+    if (this._pendingStatus && s.state === this._pendingStatus) {
+      this._pendingStatus = undefined;
+      if (s.state !== "cleaning") this._pendingRoomLabel = undefined;
+      window.clearTimeout(this._pendingTimer);
+      this._pendingTimer = undefined;
+    }
   }
 
   firstUpdated() {
@@ -3770,6 +3974,7 @@ class AppleHomeVacuumCard extends LitElement {
     super.disconnectedCallback();
     if (this._sheet) this._sheet.close();
     if (this._badge) LightField.unregister(this._badge);
+    window.clearTimeout(this._pendingTimer);
   }
 
   getCardSize() {
@@ -3825,6 +4030,21 @@ class AppleHomeVacuumCard extends LitElement {
     return this._config.color || DOMAIN_ACCENT.vacuum;
   }
 
+  _setPendingAction(detail) {
+    if (!detail) return;
+    this._pendingStatus = detail.status;
+    this._pendingRoomLabel = detail.roomLabel;
+    if (detail.status === "cleaning") this._pop = "cleaning";
+    window.clearTimeout(this._popTimer);
+    this._popTimer = window.setTimeout(() => (this._pop = null), 650);
+    window.clearTimeout(this._pendingTimer);
+    this._pendingTimer = window.setTimeout(() => {
+      this._pendingStatus = undefined;
+      this._pendingRoomLabel = undefined;
+      this._pendingTimer = undefined;
+    }, 15000);
+  }
+
   _openSheet() {
     if (this._sheet || !this.hass) return;
     const sheet = document.createElement("apple-home-vacuum-sheet");
@@ -3835,6 +4055,9 @@ class AppleHomeVacuumCard extends LitElement {
     sheet.batteryEntity = this._config.battery_entity;
     sheet.statusEntity = this._config.status_entity;
     sheet.actions = this._actionConfigs();
+    sheet.addEventListener("vacuum-action", (event) => {
+      this._setPendingAction(event.detail);
+    });
     sheet.addEventListener("sheet-closed", () => (this._sheet = undefined));
     document.body.appendChild(sheet);
     this._sheet = sheet;
@@ -3847,10 +4070,11 @@ class AppleHomeVacuumCard extends LitElement {
     if (!s) {
       return html`<ha-card><div class="tile unavailable"><div class="name">${this._config.entity}</div><div class="state">Not found</div></div></ha-card>`;
     }
-    const cleaning = s.state === "cleaning";
-    const active = ["cleaning", "returning"].includes(s.state);
+    const visibleState = this._pendingStatus || s.state;
+    const cleaning = visibleState === "cleaning";
+    const active = ["cleaning", "returning"].includes(visibleState);
     const battery = this._batteryPct();
-    const status = this._statusText();
+    const status = this._pendingStatus ? describeVacuumState(visibleState) : this._statusText();
     const accent = this._accent();
     const icon = this._config.icon || "mdi:robot-vacuum";
     const rooms = this._actionConfigs().length;
@@ -3881,7 +4105,11 @@ class AppleHomeVacuumCard extends LitElement {
               <div class="state">${status}</div>
             </div>
             <div class="meta">
-              ${rooms ? html`<span class="meta-pill">${rooms} room${rooms == 1 ? "" : "s"}</span>` : ""}
+              ${this._pendingRoomLabel
+                ? html`<span class="meta-pill">${this._pendingRoomLabel}</span>`
+                : rooms
+                  ? html`<span class="meta-pill">${rooms} room${rooms == 1 ? "" : "s"}</span>`
+                  : ""}
               <span class="meta-pill">Tap to open</span>
             </div>
           </div>
@@ -3996,18 +4224,22 @@ class AppleHomeVacuumCard extends LitElement {
         line-height: 1.1;
         letter-spacing: -0.02em;
         color: var(--primary-text-color);
-        white-space: nowrap;
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
         overflow: hidden;
-        text-overflow: ellipsis;
       }
       .state {
         font-family: ${FONT_STACK_CSS};
         font-size: 14px;
         font-weight: 500;
         color: var(--secondary-text-color);
-        white-space: nowrap;
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
         overflow: hidden;
-        text-overflow: ellipsis;
       }
       .tile.on .name,
       .tile.on .state {
@@ -4359,9 +4591,11 @@ class AppleHomeFanCard extends LitElement {
         line-height: 1.1;
         letter-spacing: -0.02em;
         color: var(--primary-text-color);
-        white-space: nowrap;
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
         overflow: hidden;
-        text-overflow: ellipsis;
       }
       .state {
         font-family: ${FONT_STACK_CSS};
@@ -4517,9 +4751,8 @@ class AppleHomeChip extends LitElement {
   _moreInfo() {
     const e = new Event("hass-more-info", { bubbles: true, composed: true });
     e.detail = { entityId: this._config.entity };
-    this.dispatchEvent(e);
+    (document.querySelector("home-assistant") || this).dispatchEvent(e);
   }
-
   _toggleEntity() {
     const stateObj = this._stateObj;
     if (!stateObj) return;
@@ -4662,9 +4895,11 @@ class AppleHomeChip extends LitElement {
         font-weight: 650;
         line-height: 1.15;
         color: var(--primary-text-color);
-        white-space: nowrap;
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
         overflow: hidden;
-        text-overflow: ellipsis;
       }
       .value {
         margin-left: auto;
@@ -4919,7 +5154,7 @@ class AppleHomeGroupSheet extends LitElement {
           <div class="grabber"></div>
           <div class="head">
             <span class="title">${this.heading || "Group"}</span>
-            <button class="close" @click=${() => this.close()}>
+            <button class="close" aria-label="Close" title="Close" @click=${() => this.close()}>
               <ha-icon icon="mdi:close"></ha-icon>
             </button>
           </div>
@@ -5074,7 +5309,11 @@ class AppleHomeGroup extends LitElement {
       .info { display: flex; flex-direction: column; min-width: 0; }
       .name {
         font-weight: 600; font-size: 15px; letter-spacing: -0.01em; color: var(--primary-text-color);
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        white-space: normal;
+        overflow: hidden;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
       }
       .sub { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); }
       .chev { position: absolute; top: 14px; right: 12px; color: var(--secondary-text-color); --mdc-icon-size: 20px; }

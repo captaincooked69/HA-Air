@@ -183,6 +183,9 @@ same way, because each tile is a CSS size container.
   # color: "#ff9f0a" # optional; otherwise inferred from device_class
 ```
 
+`custom:apple-home-weather-card` supports the same `size` values as the main tile.
+If your weather entity does not expose a `forecast` attribute, the card falls back to Home Assistant's live forecast subscription automatically.
+
 The graph tile pulls history from Home Assistant's recorder, so the sensor must be recorded
 (most are by default). Colour is inferred for temperature / humidity / PM2.5 / VOC, or set it.
 
@@ -234,7 +237,7 @@ The card looks good on any theme, but `themes/apple-home.yaml` rounds the rest o
 - [x] Group/area tiles (one tile summarising a whole room)
 - [x] Scalable tiles + weather + graph tiles
 - [ ] Auto-populate area tiles from HA areas (no manual entity list)
-- [ ] Forecast strip via `weather.get_forecasts` (for entities without a `forecast` attribute)
+- [x] Forecast strip via Home Assistant live forecast subscription fallback
 - [ ] Bundled build option for stricter CSP setups
 
 ## Why a single file?
