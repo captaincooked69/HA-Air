@@ -84,7 +84,13 @@ const DOMAIN_ACCENT = {
 function domainOf(entityId) {
   return entityId ? entityId.split(".")[0] : "";
 }
-
+function isDashboardViewHost(host) {
+  return !!(
+    host &&
+    typeof host.closest === "function" &&
+    host.closest("hui-view, hui-panel-view, hui-sections-view, hui-masonry-view")
+  );
+}
 // Re-render only when one of the given entities actually changed (plus any
 // local reactive state). Keeps big dashboards snappy.
 function onlyIfEntitiesChanged(host, changed, entityIds, localKeys) {
@@ -104,6 +110,112 @@ function isEntityOn(stateObj) {
   if (!stateObj) return false;
   const b = DOMAIN_BEHAVIOR[domainOf(stateObj.entity_id)];
   return b ? b.on(stateObj) : stateObj.state === "on";
+}
+
+function capitalizeText(s) {
+  return typeof s === "string" ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function formatNumberValue(s) {
+  const n = Number(s);
+  return Number.isNaN(n) ? capitalizeText(s) : n.toLocaleString();
+}
+
+function describeVacuumState(s) {
+  const map = {
+    cleaning: "Cleaning",
+    returning: "Returning",
+    docked: "Docked",
+    idle: "Idle",
+    paused: "Paused",
+    error: "Error",
+  };
+  return map[s] || capitalizeText(s);
+}
+
+function describeEntityState(stateObj, active) {
+  if (!stateObj) return "Unavailable";
+  const domain = domainOf(stateObj.entity_id);
+  const s = stateObj.state;
+  if (s === "unavailable") return "Unavailable";
+  if (s === "unknown") return "-";
+
+  if (domain === "light" && active) {
+    const b = stateObj.attributes.brightness;
+    if (b != null) return `${Math.round((b / 255) * 100)}%`;
+    return "On";
+  }
+  if (domain === "fan") {
+    if (!active) return "Off";
+    const pct = stateObj.attributes.percentage;
+    const preset = stateObj.attributes.preset_mode;
+    if (pct != null) return `${pct}%`;
+    if (preset) return capitalizeText(preset);
+    return "On";
+  }
+  if (domain === "cover") return capitalizeText(s);
+  if (domain === "lock") return s === "locked" ? "Locked" : "Unlocked";
+  if (domain === "scene") return "Scene";
+  if (domain === "script") return s === "on" ? "Running..." : "Run";
+  if (domain === "button" || domain === "input_button") return "Press";
+  if (domain === "vacuum") return describeVacuumState(s);
+  if (domain === "alarm_control_panel") {
+    const map = {
+      disarmed: "Off",
+      armed_home: "Home",
+      armed_away: "Away",
+      armed_night: "Night",
+      triggered: "Triggered",
+    };
+    return map[s] || capitalizeText(s);
+  }
+  if (domain === "media_player") {
+    if (active) {
+      const t = stateObj.attributes.media_title;
+      return t || capitalizeText(s);
+    }
+    return "Off";
+  }
+  if (domain === "climate") {
+    const t = stateObj.attributes.current_temperature;
+    return t != null ? `${t}°` : capitalizeText(s);
+  }
+  if (
+    ["sensor", "binary_sensor"].includes(domain) ||
+    stateObj.attributes.unit_of_measurement
+  ) {
+    const u = stateObj.attributes.unit_of_measurement || "";
+    return `${formatNumberValue(s)}${u ? ` ${u}` : ""}`;
+  }
+  return capitalizeText(s);
+}
+
+function getEntityDisplayName(stateObj, fallback) {
+  return stateObj ? stateObj.attributes.friendly_name || fallback : fallback;
+}
+
+function callConfiguredAction(hass, action) {
+  if (!hass || !action) return;
+  const svc = action.service || action.perform_action;
+  if (svc) {
+    const [d, s] = svc.split(".");
+    if (d && s) hass.callService(d, s, action.data || action.service_data || {});
+    return;
+  }
+  const entityId = action.entity || action.entity_id;
+  if (!entityId) return;
+  const stateObj = hass.states[entityId];
+  if (!stateObj) return;
+  const behavior = DOMAIN_BEHAVIOR[domainOf(entityId)];
+  if (!behavior || !behavior.toggle) return;
+  const spec =
+    typeof behavior.toggle === "function"
+      ? behavior.toggle(stateObj)
+      : behavior.toggle;
+  hass.callService(spec[0], spec[1], {
+    entity_id: entityId,
+    ...(action.data || action.service_data || {}),
+  });
 }
 
 // Open the Apple Home detail sheet for an entity. Returns the element so the
@@ -441,54 +553,7 @@ class AppleHomeCard extends LitElement {
   }
 
   _stateText(stateObj) {
-    const domain = domainOf(stateObj.entity_id);
-    const s = stateObj.state;
-    if (s === "unavailable") return "Unavailable";
-    if (s === "unknown") return "—";
-
-    if (domain === "light" && this._isOn(stateObj)) {
-      const b = stateObj.attributes.brightness;
-      if (b != null) return `${Math.round((b / 255) * 100)}%`;
-      return "On";
-    }
-    if (domain === "cover") return this._capitalize(s);
-    if (domain === "lock") return s === "locked" ? "Locked" : "Unlocked";
-    if (domain === "scene") return "Scene";
-    if (domain === "script") return s === "on" ? "Running…" : "Run";
-    if (domain === "button" || domain === "input_button") return "Press";
-    if (domain === "vacuum") {
-      const map = { cleaning: "Cleaning", returning: "Returning", docked: "Docked", idle: "Idle", paused: "Paused", error: "Error" };
-      return map[s] || this._capitalize(s);
-    }
-    if (domain === "alarm_control_panel") {
-      const map = {
-        disarmed: "Off",
-        armed_home: "Home",
-        armed_away: "Away",
-        armed_night: "Night",
-        triggered: "Triggered",
-      };
-      return map[s] || this._capitalize(s);
-    }
-    if (domain === "media_player") {
-      if (this._isOn(stateObj)) {
-        const t = stateObj.attributes.media_title;
-        return t || this._capitalize(s);
-      }
-      return "Off";
-    }
-    if (domain === "climate") {
-      const t = stateObj.attributes.current_temperature;
-      return t != null ? `${t}°` : this._capitalize(s);
-    }
-    if (
-      ["sensor", "binary_sensor"].includes(domain) ||
-      stateObj.attributes.unit_of_measurement
-    ) {
-      const u = stateObj.attributes.unit_of_measurement || "";
-      return `${this._formatNumber(s)}${u ? ` ${u}` : ""}`;
-    }
-    return this._capitalize(s);
+    return describeEntityState(stateObj, this._isOn(stateObj));
   }
 
   _capitalize(s) {
@@ -779,8 +844,22 @@ class AppleHomeCard extends LitElement {
       @container ahatile (max-width: 132px) {
         .content { padding: 11px 12px; gap: 4px; }
         .badge { width: 32px; height: 32px; --mdc-icon-size: 18px; }
-        .name { font-size: 13px; }
-        .state { font-size: 11px; }
+        .name {
+          font-size: 13px;
+          line-height: 1.12;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+        }
+        .state {
+          font-size: 11px;
+          line-height: 1.12;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+        }
       }
 
       /* Content scales up as the tile gets wider. */
@@ -1189,13 +1268,23 @@ class AppleHomeSheet extends LitElement {
           : ""}
 
         <div class="transport">
-          <button @click=${() => this._service("media_player", "media_previous_track")}>
+          <button
+            aria-label="Previous track"
+            title="Previous track"
+            @click=${() => this._service("media_player", "media_previous_track")}>
             <ha-icon icon="mdi:skip-previous"></ha-icon>
           </button>
-          <button class="primary" @click=${() => this._service("media_player", "media_play_pause")}>
+          <button
+            class="primary"
+            aria-label=${playing ? "Pause" : "Play"}
+            title=${playing ? "Pause" : "Play"}
+            @click=${() => this._service("media_player", "media_play_pause")}>
             <ha-icon icon=${playing ? "mdi:pause" : "mdi:play"}></ha-icon>
           </button>
-          <button @click=${() => this._service("media_player", "media_next_track")}>
+          <button
+            aria-label="Next track"
+            title="Next track"
+            @click=${() => this._service("media_player", "media_next_track")}>
             <ha-icon icon="mdi:skip-next"></ha-icon>
           </button>
         </div>
@@ -1282,6 +1371,76 @@ class AppleHomeSheet extends LitElement {
     `;
   }
 
+  _renderFan(s) {
+    const a = s.attributes;
+    const on = s.state === "on";
+    const pct = a.percentage != null ? a.percentage : 0;
+    const pctStep = a.percentage_step || 1;
+    const presets = Array.isArray(a.preset_modes) ? a.preset_modes : [];
+    const hasPct = a.percentage != null || a.percentage_step != null;
+    const canOsc = typeof a.oscillating === "boolean";
+    const canDir = typeof a.direction === "string";
+    return html`
+      <div class="fan-sheet">
+        <button
+          class="toggle-big ${on ? "on" : ""}"
+          @click=${() => this._service("fan", on ? "turn_off" : "turn_on")}
+        >
+          <ha-state-icon .hass=${this.hass} .stateObj=${s}></ha-state-icon>
+          <span>${on ? "On" : "Off"}</span>
+        </button>
+
+        ${hasPct
+          ? html`<div class="control-row">
+              <span class="row-label">Speed</span>
+              <input
+                type="range" min="0" max="100" step=${pctStep}
+                .value=${String(pct)}
+                @change=${(e) => {
+                  const value = Number(e.target.value);
+                  if (value <= 0) this._service("fan", "turn_off");
+                  else this._service("fan", "set_percentage", { percentage: value });
+                }}
+              />
+              <span class="row-value">${pct}%</span>
+            </div>`
+          : ""}
+
+        ${presets.length
+          ? html`<select
+              class="source"
+              @change=${(e) =>
+                this._service("fan", "set_preset_mode", { preset_mode: e.target.value })}
+            >
+              ${presets.map(
+                (preset) => html`<option ?selected=${preset === a.preset_mode}>${preset}</option>`
+              )}
+            </select>`
+          : ""}
+
+        ${canOsc || canDir
+          ? html`<div class="grid-btns fan-actions">
+              ${canOsc
+                ? html`<button @click=${() => this._service("fan", "oscillate", { oscillating: !a.oscillating })}>
+                    <ha-icon icon="mdi:rotate-orbit"></ha-icon>
+                    <span>${a.oscillating ? "Stop Swing" : "Swing"}</span>
+                  </button>`
+                : ""}
+              ${canDir
+                ? html`<button @click=${() =>
+                    this._service("fan", "set_direction", {
+                      direction: a.direction === "forward" ? "reverse" : "forward",
+                    })}>
+                    <ha-icon icon="mdi:swap-horizontal"></ha-icon>
+                    <span>${a.direction === "forward" ? "Reverse" : "Forward"}</span>
+                  </button>`
+                : ""}
+            </div>`
+          : ""}
+      </div>
+    `;
+  }
+
   _renderVacuum(s) {
     const cleaning = s.state === "cleaning";
     return html`
@@ -1335,6 +1494,7 @@ class AppleHomeSheet extends LitElement {
       case "media_player": return this._renderMedia(s);
       case "cover": return this._renderCover(s);
       case "climate": return this._renderClimate(s);
+      case "fan": return this._renderFan(s);
       case "vacuum": return this._renderVacuum(s);
       default: return this._renderToggle(s);
     }
@@ -1475,6 +1635,7 @@ class AppleHomeSheet extends LitElement {
         --mdc-icon-size: 20px; color: var(--sheet-sub);
       }
       .row-label { font-size: 14px; min-width: 84px; }
+      .row-value { font-size: 13px; color: var(--sheet-sub); min-width: 42px; text-align: right; }
       .control-row input[type="range"] { flex: 1; }
 
       input[type="range"] {
@@ -1534,6 +1695,9 @@ class AppleHomeSheet extends LitElement {
         display: grid; place-items: center;
       }
       .transport button.primary { --mdc-icon-size: 44px; }
+
+      .fan-sheet { display: flex; flex-direction: column; gap: 16px; }
+      .fan-actions { grid-template-columns: repeat(2, 1fr); }
 
       /* Climate */
       .big-number {
@@ -1682,13 +1846,23 @@ class AppleHomeMediaCard extends LitElement {
               </div>
             </div>
             <div class="transport" @click=${(e) => e.stopPropagation()}>
-              <button @click=${() => this._svc("media_previous_track")}>
+              <button
+                aria-label="Previous track"
+                title="Previous track"
+                @click=${() => this._svc("media_previous_track")}>
                 <ha-icon icon="mdi:skip-previous"></ha-icon>
               </button>
-              <button class="primary" @click=${() => this._svc("media_play_pause")}>
+              <button
+                class="primary"
+                aria-label=${playing ? "Pause" : "Play"}
+                title=${playing ? "Pause" : "Play"}
+                @click=${() => this._svc("media_play_pause")}>
                 <ha-icon icon=${playing ? "mdi:pause" : "mdi:play"}></ha-icon>
               </button>
-              <button @click=${() => this._svc("media_next_track")}>
+              <button
+                aria-label="Next track"
+                title="Next track"
+                @click=${() => this._svc("media_next_track")}>
                 <ha-icon icon="mdi:skip-next"></ha-icon>
               </button>
             </div>
@@ -1714,7 +1888,7 @@ class AppleHomeMediaCard extends LitElement {
   static get styles() {
     return css`
       ${GLASS_BADGE_CSS}
-      :host { display: block; height: 100%; }
+      :host { display: block; height: 100%; container-type: inline-size; container-name: ahamedia; }
       ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
       .pbar {
         height: 3px; border-radius: 2px; margin-top: 8px;
@@ -1752,15 +1926,15 @@ class AppleHomeMediaCard extends LitElement {
         background: rgba(255,255,255,0.92); color: #1c1c1e;
       }
       .tile.off .badge { background: rgba(120,120,128,0.28); color: var(--primary-text-color); }
-      .labels { display: flex; flex-direction: column; min-width: 0; }
+      .labels { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
       .title {
-        font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-        color: var(--primary-text-color);
+        font-weight: 600; font-size: 15px; letter-spacing: -0.01em; line-height: 1.12;
+        overflow: hidden; color: var(--primary-text-color);
+        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
       }
       .sub {
-        font-size: 13px; font-weight: 500; color: var(--secondary-text-color);
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        font-size: 13px; font-weight: 500; color: var(--secondary-text-color); line-height: 1.15;
+        overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
       }
       .tile.on .art ~ .content .title, .tile.on .scrim ~ .content .title,
       .tile.on .content .title { color: #fff; }
@@ -1774,10 +1948,25 @@ class AppleHomeMediaCard extends LitElement {
       }
       .tile.on .transport button { color: #fff; }
       .transport button.primary { --mdc-icon-size: 32px; }
+      @container ahamedia (max-width: 180px) {
+        .content { padding: 12px 13px; gap: 6px; }
+        .top { gap: 10px; }
+        .badge { width: 34px; height: 34px; --mdc-icon-size: 20px; }
+        .title { font-size: 13px; }
+        .sub { font-size: 11px; }
+        .transport { gap: 12px; --mdc-icon-size: 20px; }
+        .transport button.primary { --mdc-icon-size: 28px; }
+      }
+      @container ahamedia (min-width: 260px) {
+        .content { padding: 16px 18px; }
+        .badge { width: 42px; height: 42px; --mdc-icon-size: 24px; }
+        .title { font-size: 17px; }
+        .sub { font-size: 14px; }
+        .transport button.primary { --mdc-icon-size: 36px; }
+      }
     `;
   }
 }
-
 customElements.define("apple-home-media-card", AppleHomeMediaCard);
 
 // ===========================================================================
@@ -1882,7 +2071,7 @@ class AppleHomeClimateCard extends LitElement {
   static get styles() {
     return css`
       ${GLASS_BADGE_CSS}
-      :host { display: block; height: 100%; }
+      :host { display: block; height: 100%; container-type: inline-size; container-name: ahaclimate; }
       ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
       .tile {
         position: relative; height: 100%; min-height: 96px; box-sizing: border-box;
@@ -1902,15 +2091,15 @@ class AppleHomeClimateCard extends LitElement {
         background: rgba(120,120,128,0.28); color: var(--primary-text-color);
       }
       .tile.on .badge { background: rgba(255,255,255,0.92); color: #1c1c1e; }
-      .labels { display: flex; flex-direction: column; min-width: 0; }
+      .labels { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
       .name {
-        font-weight: 600; font-size: 15px; letter-spacing: -0.01em;
+        font-weight: 600; font-size: 15px; letter-spacing: -0.01em; line-height: 1.12;
         color: var(--primary-text-color);
-        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
       }
-      .sub { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); }
+      .sub { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); line-height: 1.15; }
       .tile.on .name, .tile.on .sub { color: #1c1c1e; }
-      .dial { display: flex; align-items: center; justify-content: space-between; }
+      .dial { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
       .dial button {
         width: 34px; height: 34px; border-radius: 50%; border: none; cursor: pointer;
         background: rgba(120,120,128,0.28); color: var(--primary-text-color);
@@ -1920,10 +2109,23 @@ class AppleHomeClimateCard extends LitElement {
       .dial button[disabled] { opacity: 0.4; cursor: default; }
       .target { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; color: var(--primary-text-color); }
       .tile.on .target { color: #1c1c1e; }
+      @container ahaclimate (max-width: 180px) {
+        .tile { padding: 12px 13px; gap: 8px; }
+        .badge, .dial button { width: 30px; height: 30px; --mdc-icon-size: 18px; }
+        .name { font-size: 13px; }
+        .sub { font-size: 11px; }
+        .target { font-size: 22px; }
+      }
+      @container ahaclimate (min-width: 250px) {
+        .tile { padding: 16px 18px; }
+        .badge, .dial button { width: 38px; height: 38px; --mdc-icon-size: 22px; }
+        .name { font-size: 17px; }
+        .sub { font-size: 14px; }
+        .target { font-size: 30px; }
+      }
     `;
   }
 }
-
 customElements.define("apple-home-climate-card", AppleHomeClimateCard);
 
 // ===========================================================================
@@ -2046,6 +2248,20 @@ class AppleHomeAreaCard extends LitElement {
       }
       ha-card { background: transparent; border: none; box-shadow: none; height: 100%; }
 
+      @container ahatile (max-width: 132px) {
+        .tile { padding: 12px 13px; gap: 8px; }
+        .badge { width: 32px; height: 32px; --mdc-icon-size: 18px; }
+        .name {
+          font-size: 13px;
+          line-height: 1.12;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+        }
+        .sub { font-size: 11px; }
+      }
+
       @container ahatile (min-width: 175px) {
         .tile { padding: 16px 18px; }
         .badge { width: 44px; height: 44px; --mdc-icon-size: 24px; }
@@ -2166,13 +2382,15 @@ const GLASS_OVERLAY_SVG = `
   </g>
 </svg>`;
 
-function ensureBackgroundLayer() {
-  let layer = document.getElementById("aha-bg-layer");
+function ensureBackgroundLayer(doc) {
+  if (!doc || !doc.head || !doc.body) return null;
+
+  let layer = doc.getElementById("aha-bg-layer");
   if (layer) return layer;
 
   // Make HA's own surfaces see-through so the backdrop shows behind the cards.
-  if (!document.getElementById("aha-bg-transparency")) {
-    const t = document.createElement("style");
+  if (!doc.getElementById("aha-bg-transparency")) {
+    const t = doc.createElement("style");
     t.id = "aha-bg-transparency";
     t.textContent =
       "html, body { background: transparent !important; }" +
@@ -2180,11 +2398,11 @@ function ensureBackgroundLayer() {
       " --view-background: transparent !important; }" +
       "hui-view, hui-sections-view, hui-masonry-view, hui-panel-view," +
       " hui-root, ha-drawer .content { background: transparent !important; }";
-    document.head.appendChild(t);
+    doc.head.appendChild(t);
   }
 
-  if (!document.getElementById("aha-bg-anim")) {
-    const a = document.createElement("style");
+  if (!doc.getElementById("aha-bg-anim")) {
+    const a = doc.createElement("style");
     a.id = "aha-bg-anim";
     a.textContent =
       "#aha-bg-layer{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none;}" +
@@ -2197,23 +2415,26 @@ function ensureBackgroundLayer() {
       "@keyframes aha-bg-float{from{transform:translate(0,0)}to{transform:translate(-2%,2%)}}" +
       "@media (prefers-reduced-motion: reduce){#aha-bg-layer .aha-bg-gradient," +
       "#aha-bg-layer .aha-bg-glass{animation:none !important}}";
-    document.head.appendChild(a);
+    doc.head.appendChild(a);
   }
 
-  layer = document.createElement("div");
+  layer = doc.createElement("div");
   layer.id = "aha-bg-layer";
-  const grad = document.createElement("div");
+  const grad = doc.createElement("div");
   grad.className = "aha-bg-gradient";
   layer.appendChild(grad);
   layer.insertAdjacentHTML("beforeend", GLASS_OVERLAY_SVG);
-  document.body.appendChild(layer);
+  doc.body.appendChild(layer);
   return layer;
 }
 
-function applyBackground(key) {
+function applyBackground(key, doc) {
   const bg = BACKGROUNDS[key] ? key : "aurora";
-  const layer = ensureBackgroundLayer();
-  layer.querySelector(".aha-bg-gradient").style.background = BACKGROUNDS[bg].css;
+  const layer = ensureBackgroundLayer(doc);
+  if (!layer) return;
+  const grad = layer.querySelector(".aha-bg-gradient");
+  if (!grad) return;
+  grad.style.background = BACKGROUNDS[bg].css;
   layer.dataset.key = bg;
   try {
     localStorage.setItem("apple-home-background", bg);
@@ -2254,14 +2475,26 @@ class AppleHomeBackground extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
-    applyBackground(
-      currentBackgroundKey() || (this._config && this._config.background) || "aurora"
-    );
+    this._syncBackground();
   }
 
   _select(key) {
-    applyBackground(key);
+    const doc = this.ownerDocument || document;
+    if (isDashboardViewHost(this)) applyBackground(key, doc);
     this.requestUpdate();
+  }
+
+  updated(changed) {
+    if (changed.has("_config")) this._syncBackground();
+  }
+
+  _syncBackground() {
+    const doc = this.ownerDocument || document;
+    if (!isDashboardViewHost(this) || !doc || !doc.head || !doc.body) return;
+    applyBackground(
+      currentBackgroundKey() || (this._config && this._config.background) || "aurora",
+      doc
+    );
   }
 
   render() {
@@ -2394,12 +2627,12 @@ class AppleHomeWeatherCard extends LitElement {
 
   static getStubConfig(hass) {
     const w = Object.keys(hass.states).find((e) => e.startsWith("weather."));
-    return { entity: w || "" };
+    return { entity: w || "", forecast_days: 7, animated: true };
   }
 
   setConfig(config) {
     if (!config.entity) throw new Error("You must define a weather entity");
-    this._config = config;
+    this._config = { forecast_days: 7, animated: true, ...config };
   }
 
   getCardSize() {
@@ -2431,6 +2664,29 @@ class AppleHomeWeatherCard extends LitElement {
     return n == null || isNaN(n) ? null : Math.round(n);
   }
 
+  _forecast() {
+    const s = this._stateObj;
+    const days = Math.max(0, Math.min(7, Number(this._config.forecast_days ?? 7) || 0));
+    if (!s || !days) return [];
+    const raw = Array.isArray(s.attributes.forecast) ? s.attributes.forecast : [];
+    return raw.slice(0, days);
+  }
+
+  _locationName() {
+    return (this.hass && this.hass.config && this.hass.config.location_name) || null;
+  }
+
+  _animClass(cond) {
+    if (["rainy", "pouring", "lightning-rainy"].includes(cond)) return "rain";
+    if (["snowy", "snowy-rainy", "hail"].includes(cond)) return "snow";
+    if (["lightning", "exceptional"].includes(cond)) return "storm";
+    if (["cloudy", "partlycloudy"].includes(cond)) return "clouds";
+    if (["windy", "windy-variant", "fog"].includes(cond)) return "wind";
+    if (cond === "clear-night") return "night";
+    if (cond === "sunny") return "sunny";
+    return "calm";
+  }
+
   render() {
     if (!this._config || !this.hass) return html``;
     const s = this._stateObj;
@@ -2441,24 +2697,25 @@ class AppleHomeWeatherCard extends LitElement {
     const grad = WEATHER_GRADIENT[cond] || WEATHER_GRADIENT._default;
     const unit = this._unit();
     const temp = this._round(a.temperature);
-    const name = this._config.name || a.friendly_name || "Weather";
-
-    const fc = Array.isArray(a.forecast) ? a.forecast.slice(0, 6) : [];
+    const name = this._config.name || this._locationName() || a.friendly_name || "Weather";
+    const fc = this._forecast();
     const hi = this._round(fc.length ? fc[0].temperature : a.temperature);
     const lo = this._round(fc.length ? fc[0].templow : undefined);
+    const animClass = this._config.animated === false ? "off" : this._animClass(cond);
 
     return html`
       <ha-card style="--wx-grad:${grad}">
+        <div class="sky ${animClass}" aria-hidden="true"></div>
         <div class="wx">
           <div class="head">
             <div class="now">
-              <div class="temp">${temp != null ? `${temp}°` : "—"}</div>
+              <div class="temp">${temp != null ? `${temp}${unit}` : "—"}</div>
               <div class="meta">
                 <span class="name">${name}</span>
                 <span class="cond">${this._cap(cond)}</span>
                 <span class="hilo">
-                  ${hi != null ? html`H:${hi}°` : ""}
-                  ${lo != null ? html` L:${lo}°` : ""}
+                  ${hi != null ? html`H:${hi}${unit}` : ""}
+                  ${lo != null ? html` L:${lo}${unit}` : ""}
                 </span>
               </div>
             </div>
@@ -2468,9 +2725,9 @@ class AppleHomeWeatherCard extends LitElement {
             ? html`<div class="strip">
                 ${fc.map(
                   (f) => html`<div class="col">
-                    <span class="d">${this._day(f.datetime)}</span>
+                    <span class="d">${this._day(f.datetime || f.datetime_iso || f.native_datetime)}</span>
                     <ha-icon icon=${WEATHER_ICON[f.condition] || "mdi:weather-cloudy"}></ha-icon>
-                    <span class="t">${this._round(f.temperature)}°</span>
+                    <span class="t">${this._round(f.temperature)}${unit}</span>
                   </div>`
                 )}
               </div>`
@@ -2494,8 +2751,9 @@ class AppleHomeWeatherCard extends LitElement {
 
   static get styles() {
     return css`
-      :host { display: block; height: 100%; }
+      :host { display: block; height: 100%; container-type: inline-size; container-name: ahawx; }
       ha-card {
+        position: relative;
         height: 100%;
         border: none;
         border-radius: 22px;
@@ -2504,8 +2762,90 @@ class AppleHomeWeatherCard extends LitElement {
         overflow: hidden;
         font-family: ${FONT_STACK_CSS};
         color: #fff;
+        isolation: isolate;
+      }
+      .sky {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        opacity: 0.55;
+      }
+      .sky.off { display: none; }
+      .sky::before,
+      .sky::after {
+        content: "";
+        position: absolute;
+        pointer-events: none;
+      }
+      .sky.sunny::before {
+        width: 140px; height: 140px; border-radius: 50%;
+        top: -26px; right: -20px;
+        background: radial-gradient(circle, rgba(255,255,255,0.75), rgba(255,255,255,0));
+        animation: aha-wx-pulse 6s ease-in-out infinite;
+      }
+      .sky.night::before {
+        inset: 0;
+        background:
+          radial-gradient(circle at 18% 22%, rgba(255,255,255,0.95) 0 1px, transparent 2px),
+          radial-gradient(circle at 72% 18%, rgba(255,255,255,0.7) 0 1px, transparent 2px),
+          radial-gradient(circle at 52% 36%, rgba(255,255,255,0.8) 0 1px, transparent 2px),
+          radial-gradient(circle at 82% 42%, rgba(255,255,255,0.55) 0 1px, transparent 2px);
+        animation: aha-wx-twinkle 7s ease-in-out infinite;
+      }
+      .sky.night::after {
+        width: 90px; height: 90px; border-radius: 50%;
+        top: -12px; right: -8px;
+        background: radial-gradient(circle, rgba(255,255,255,0.5), rgba(255,255,255,0));
+      }
+      .sky.clouds::before,
+      .sky.storm::before,
+      .sky.wind::before {
+        width: 180px; height: 72px; border-radius: 999px;
+        top: 18px; left: -40px;
+        background: rgba(255,255,255,0.22);
+        filter: blur(10px);
+        animation: aha-wx-drift 14s linear infinite;
+      }
+      .sky.clouds::after,
+      .sky.storm::after {
+        width: 140px; height: 56px; border-radius: 999px;
+        top: 58px; right: -24px;
+        background: rgba(255,255,255,0.14);
+        filter: blur(12px);
+        animation: aha-wx-drift 18s linear infinite reverse;
+      }
+      .sky.rain::before,
+      .sky.wind::after {
+        inset: -20% -10%;
+        background: repeating-linear-gradient(
+          105deg,
+          rgba(255,255,255,0) 0 12px,
+          rgba(255,255,255,0.18) 12px 14px,
+          rgba(255,255,255,0) 14px 28px
+        );
+        animation: aha-wx-rain 1.6s linear infinite;
+      }
+      .sky.snow::before {
+        inset: -10%;
+        background:
+          radial-gradient(circle at 12% 18%, rgba(255,255,255,0.9) 0 2px, transparent 3px),
+          radial-gradient(circle at 34% 58%, rgba(255,255,255,0.8) 0 2px, transparent 3px),
+          radial-gradient(circle at 68% 26%, rgba(255,255,255,0.85) 0 2px, transparent 3px),
+          radial-gradient(circle at 82% 72%, rgba(255,255,255,0.75) 0 2px, transparent 3px),
+          radial-gradient(circle at 54% 86%, rgba(255,255,255,0.8) 0 2px, transparent 3px);
+        background-size: 140px 140px;
+        animation: aha-wx-snow 8s linear infinite;
+      }
+      .sky.storm::after {
+        inset: 0;
+        background: linear-gradient(135deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.75) 50%, rgba(255,255,255,0) 70%);
+        opacity: 0;
+        animation: aha-wx-flash 4s ease-in-out infinite;
       }
       .wx {
+        position: relative;
+        z-index: 1;
         height: 100%;
         box-sizing: border-box;
         padding: 16px 18px;
@@ -2514,37 +2854,102 @@ class AppleHomeWeatherCard extends LitElement {
         justify-content: space-between;
         gap: 12px;
       }
-      .head { display: flex; align-items: flex-start; justify-content: space-between; }
-      .now { display: flex; align-items: baseline; gap: 14px; }
+      .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .now { display: flex; align-items: baseline; gap: 14px; min-width: 0; }
       .temp {
+        flex: none;
         font-size: 52px;
         font-weight: 300;
         letter-spacing: -0.03em;
         line-height: 0.9;
         text-shadow: 0 1px 8px rgba(0, 0, 0, 0.2);
       }
-      .meta { display: flex; flex-direction: column; gap: 2px; }
-      .name { font-size: 15px; font-weight: 600; }
+      .meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+      .name {
+        font-size: 15px; font-weight: 600; line-height: 1.12;
+        overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+      }
       .cond { font-size: 14px; opacity: 0.92; }
       .hilo { font-size: 13px; opacity: 0.85; }
-      .big-ic { --mdc-icon-size: 56px; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25)); }
+      .big-ic { --mdc-icon-size: 56px; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.25)); flex: none; }
       .strip {
         display: flex;
-        justify-content: space-between;
+        justify-content: flex-start;
         gap: 6px;
         border-top: 1px solid rgba(255, 255, 255, 0.18);
         padding-top: 10px;
+        overflow-x: auto;
+        scrollbar-width: none;
       }
+      .strip::-webkit-scrollbar { display: none; }
       .col {
         display: flex;
         flex-direction: column;
         align-items: center;
         gap: 4px;
-        flex: 1;
+        flex: none;
+        min-width: 42px;
         --mdc-icon-size: 22px;
       }
       .col .d { font-size: 12px; opacity: 0.85; }
       .col .t { font-size: 13px; font-weight: 600; }
+      @container ahawx (max-width: 210px) {
+        .wx { padding: 12px 14px; gap: 10px; }
+        .now { gap: 10px; }
+        .temp { font-size: 38px; }
+        .name { font-size: 13px; }
+        .cond, .hilo, .col .t { font-size: 11px; }
+        .col .d { font-size: 10px; }
+        .big-ic { --mdc-icon-size: 42px; }
+        .col { min-width: 36px; }
+      }
+      @container ahawx (max-width: 160px) {
+        .wx { padding: 10px 12px; gap: 8px; }
+        .temp { font-size: 30px; }
+        .big-ic { --mdc-icon-size: 32px; }
+        .cond, .hilo, .col .t { font-size: 10px; }
+        .col .d { font-size: 9px; }
+        .col { min-width: 32px; }
+      }
+      @container ahawx (min-width: 280px) {
+        .temp { font-size: 60px; }
+        .name { font-size: 16px; }
+        .cond { font-size: 15px; }
+        .hilo { font-size: 14px; }
+        .big-ic { --mdc-icon-size: 64px; }
+        .strip { gap: 8px; }
+        .col { min-width: 46px; }
+      }
+      @keyframes aha-wx-pulse {
+        0%, 100% { transform: scale(0.94); opacity: 0.72; }
+        50% { transform: scale(1.04); opacity: 1; }
+      }
+      @keyframes aha-wx-twinkle {
+        0%, 100% { opacity: 0.45; }
+        50% { opacity: 0.9; }
+      }
+      @keyframes aha-wx-drift {
+        from { transform: translateX(0); }
+        to { transform: translateX(26px); }
+      }
+      @keyframes aha-wx-rain {
+        from { transform: translateY(-12px); }
+        to { transform: translateY(18px); }
+      }
+      @keyframes aha-wx-snow {
+        from { transform: translateY(-8px) translateX(0); }
+        to { transform: translateY(16px) translateX(8px); }
+      }
+      @keyframes aha-wx-flash {
+        0%, 82%, 100% { opacity: 0; }
+        84% { opacity: 0.85; }
+        88% { opacity: 0.15; }
+        90% { opacity: 0.65; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .sky::before,
+        .sky::after { animation: none !important; }
+      }
     `;
   }
 }
@@ -2666,7 +3071,6 @@ class AppleHomeGraphCard extends LitElement {
     const area = `${line} L${w} ${h} L0 ${h} Z`;
     return { line, area, minV, maxV };
   }
-
   render() {
     if (!this._config || !this.hass) return html``;
     const s = this._stateObj;
@@ -2739,7 +3143,7 @@ class AppleHomeGraphCard extends LitElement {
 
   static get styles() {
     return css`
-      :host { display: block; height: 100%; }
+      :host { display: block; height: 100%; container-type: inline-size; container-name: ahagraph; }
       ha-card {
         height: 100%;
         border: none;
@@ -2762,6 +3166,7 @@ class AppleHomeGraphCard extends LitElement {
         display: flex;
         align-items: baseline;
         justify-content: space-between;
+        gap: 10px;
         padding: 14px 16px 6px;
       }
       .name {
@@ -2769,9 +3174,11 @@ class AppleHomeGraphCard extends LitElement {
         font-weight: 600;
         letter-spacing: -0.01em;
         color: var(--primary-text-color);
-        white-space: nowrap;
+        line-height: 1.12;
         overflow: hidden;
-        text-overflow: ellipsis;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
       }
       .val {
         font-size: 22px;
@@ -2779,6 +3186,7 @@ class AppleHomeGraphCard extends LitElement {
         letter-spacing: -0.02em;
         color: var(--g-color);
         white-space: nowrap;
+        flex: none;
       }
       .unit { font-size: 13px; font-weight: 500; opacity: 0.7; margin-left: 2px; }
       .chart { position: relative; flex: 1; min-height: 48px; }
@@ -2801,16 +3209,1446 @@ class AppleHomeGraphCard extends LitElement {
         color: var(--secondary-text-color);
         font-size: 13px;
       }
+      @container ahagraph (max-width: 180px) {
+        .head { flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 13px 4px; }
+        .name { font-size: 13px; }
+        .val { font-size: 18px; }
+        .unit, .loading, .minmax { font-size: 11px; }
+      }
+      @container ahagraph (min-width: 250px) {
+        .name { font-size: 17px; }
+        .val { font-size: 26px; }
+        .unit { font-size: 14px; }
+      }
     `;
   }
 }
-
 customElements.define("apple-home-graph-card", AppleHomeGraphCard);
 
 // ===========================================================================
 // Pager — an iPhone-style swipeable, paged container. Each page is a room (or
 // any group of cards); swipe horizontally with snap + page dots.
 // ===========================================================================
+
+class AppleHomeVacuumSheet extends LitElement {
+  static get properties() {
+    return {
+      hass: {},
+      entityId: {},
+      accent: {},
+      heading: {},
+      batteryEntity: {},
+      statusEntity: {},
+      actions: {},
+      _open: { state: true },
+    };
+  }
+
+  get _stateObj() {
+    return this.hass && this.entityId ? this.hass.states[this.entityId] : undefined;
+  }
+
+  get _batteryObj() {
+    return this.hass && this.batteryEntity ? this.hass.states[this.batteryEntity] : undefined;
+  }
+
+  get _statusObj() {
+    return this.hass && this.statusEntity ? this.hass.states[this.statusEntity] : undefined;
+  }
+
+  show() {
+    this._open = true;
+  }
+
+  close() {
+    if (this._closing) return;
+    this._closing = true;
+    this._open = false;
+    window.setTimeout(() => {
+      this.dispatchEvent(new Event("sheet-closed"));
+      this.remove();
+    }, 320);
+  }
+
+  _service(service) {
+    this.hass.callService("vacuum", service, { entity_id: this.entityId });
+  }
+
+  _moreInfo() {
+    const e = new Event("hass-more-info", { bubbles: true, composed: true });
+    e.detail = { entityId: this.entityId };
+    (document.querySelector("home-assistant") || this).dispatchEvent(e);
+    this.close();
+  }
+
+  _batteryPct() {
+    const s = this._stateObj;
+    const direct = s && s.attributes.battery_level;
+    if (direct != null && !Number.isNaN(Number(direct))) return Math.round(Number(direct));
+    const sensor = this._batteryObj;
+    if (!sensor) return null;
+    const n = Number(sensor.state);
+    return Number.isNaN(n) ? null : Math.round(n);
+  }
+
+  _statusText() {
+    const sensor = this._statusObj;
+    if (sensor && !["unknown", "unavailable", "none"].includes(sensor.state)) {
+      return describeEntityState(sensor, isEntityOn(sensor));
+    }
+    const s = this._stateObj;
+    return s ? describeVacuumState(s.state) : "Unavailable";
+  }
+
+  _primaryAction() {
+    const s = this._stateObj;
+    if (!s) return { label: "Start", service: "start", icon: "mdi:play" };
+    if (s.state === "cleaning") {
+      return { label: "Pause", service: "pause", icon: "mdi:pause" };
+    }
+    if (s.state === "paused") {
+      return { label: "Resume", service: "start", icon: "mdi:play" };
+    }
+    return { label: "Start", service: "start", icon: "mdi:play" };
+  }
+
+  _actionConfigs() {
+    return Array.isArray(this.actions) ? this.actions : [];
+  }
+
+  _actionLabel(action) {
+    if (action.label) return action.label;
+    const entityId = action.entity || action.entity_id;
+    if (!entityId) return "Action";
+    return getEntityDisplayName(this.hass.states[entityId], entityId);
+  }
+
+  _actionIcon(action) {
+    return action.icon || "mdi:floor-plan";
+  }
+
+  _renderStatusPill(label, value, accent) {
+    return html`<span class="pill ${accent ? "accent" : ""}"><span>${label}</span><strong>${value}</strong></span>`;
+  }
+
+  render() {
+    const s = this._stateObj;
+    const primary = this._primaryAction();
+    const battery = this._batteryPct();
+    const status = this._statusText();
+    const cleaning = s && s.state === "cleaning";
+    const returning = s && s.state === "returning";
+    const name = this.heading || getEntityDisplayName(s, this.entityId);
+    const quickActions = this._actionConfigs();
+    const subtitle = cleaning
+      ? "Cleaning is in progress."
+      : returning
+        ? "Heading back to the dock."
+        : "Ready for the next run.";
+    return html`
+      <div
+        class="backdrop ${this._open ? "open" : ""}"
+        @click=${(e) => { if (e.target === e.currentTarget) this.close(); }}
+      >
+        <div class="sheet ${this._open ? "open" : ""}" style="--sheet-accent:${this.accent || "#64d2ff"}">
+          <div class="grabber"></div>
+          <div class="head">
+            <span class="title">${name}</span>
+            <button class="close" @click=${() => this.close()}>
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+
+          <div class="hero ${cleaning ? "cleaning" : returning ? "returning" : ""}">
+            <div class="hero-main">
+              <div class="hero-badge">
+                <ha-icon icon="mdi:robot-vacuum"></ha-icon>
+              </div>
+              <div class="hero-copy">
+                <div class="hero-state">${status}</div>
+                <div class="hero-sub">${subtitle}</div>
+              </div>
+            </div>
+            <div class="pill-row">
+              ${battery != null ? this._renderStatusPill("Battery", `${battery}%`, true) : ""}
+              ${s ? this._renderStatusPill("State", describeVacuumState(s.state), false) : ""}
+            </div>
+          </div>
+
+          <div class="section-title">Controls</div>
+          <div class="grid-btns primary-grid">
+            <button @click=${() => this._service(primary.service)}>
+              <ha-icon icon=${primary.icon}></ha-icon>
+              <span>${primary.label}</span>
+            </button>
+            <button @click=${() => this._service("return_to_base")}>
+              <ha-icon icon="mdi:home-import-outline"></ha-icon>
+              <span>Dock</span>
+            </button>
+            <button @click=${() => this._service("locate")}>
+              <ha-icon icon="mdi:map-marker"></ha-icon>
+              <span>Locate</span>
+            </button>
+          </div>
+
+          ${quickActions.length
+            ? html`
+                <div class="section-title">Quick Rooms</div>
+                <div class="action-grid">
+                  ${quickActions.map(
+                    (action) => html`
+                      <button class="room-action" @click=${() => callConfiguredAction(this.hass, action)}>
+                        <ha-icon icon=${this._actionIcon(action)}></ha-icon>
+                        <span>${this._actionLabel(action)}</span>
+                      </button>
+                    `
+                  )}
+                </div>
+              `
+            : ""}
+
+          <button class="more" @click=${() => this._moreInfo()}>Open in Home Assistant</button>
+        </div>
+      </div>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        --sheet-fg: #fff;
+        --sheet-sub: rgba(235, 235, 245, 0.68);
+        --sheet-bg: rgba(28, 28, 30, 0.84);
+        --sheet-control: rgba(120, 120, 128, 0.22);
+        font-family: ${FONT_STACK_CSS};
+      }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0);
+        transition: background 0.3s ease;
+      }
+      .backdrop.open {
+        background: rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(2px);
+      }
+      .sheet {
+        width: 100%;
+        max-width: 430px;
+        margin: 0 8px;
+        box-sizing: border-box;
+        background: var(--sheet-bg);
+        backdrop-filter: blur(40px) saturate(180%);
+        -webkit-backdrop-filter: blur(40px) saturate(180%);
+        color: var(--sheet-fg);
+        border-radius: 28px 28px 0 0;
+        padding: 10px 20px 20px;
+        transform: translateY(110%);
+        transition: transform 0.36s cubic-bezier(0.2, 0.9, 0.3, 1);
+        box-shadow: 0 -8px 40px rgba(0, 0, 0, 0.4);
+      }
+      .sheet.open { transform: translateY(0); }
+      @media (min-width: 600px) {
+        .backdrop { align-items: center; }
+        .sheet {
+          border-radius: 30px;
+          transform: translateY(20px) scale(0.96);
+          opacity: 0;
+          transition: transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.32s ease;
+        }
+        .sheet.open {
+          transform: translateY(0) scale(1);
+          opacity: 1;
+        }
+      }
+      .grabber {
+        width: 38px;
+        height: 5px;
+        border-radius: 3px;
+        background: rgba(235, 235, 245, 0.3);
+        margin: 6px auto 12px;
+      }
+      .head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+      .title {
+        font-size: 22px;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .close {
+        width: 30px;
+        height: 30px;
+        border: none;
+        border-radius: 50%;
+        background: rgba(120, 120, 128, 0.3);
+        color: var(--sheet-sub);
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        --mdc-icon-size: 18px;
+      }
+      .hero {
+        position: relative;
+        overflow: hidden;
+        border-radius: 26px;
+        padding: 18px;
+        margin-bottom: 18px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+          radial-gradient(circle at top right, color-mix(in srgb, var(--sheet-accent) 48%, transparent), transparent 58%),
+          var(--sheet-control);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: -40% auto -40% -30%;
+        width: 55%;
+        background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.16), rgba(255,255,255,0));
+        transform: rotate(14deg);
+        opacity: 0;
+        pointer-events: none;
+      }
+      .hero.cleaning::after {
+        opacity: 1;
+        animation: aha-vacuum-sheen 2.6s linear infinite;
+      }
+      .hero-main {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .hero-badge {
+        width: 62px;
+        height: 62px;
+        border-radius: 20px;
+        display: grid;
+        place-items: center;
+        flex: none;
+        background: rgba(255, 255, 255, 0.9);
+        color: #111;
+        --mdc-icon-size: 34px;
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+      }
+      .hero.cleaning .hero-badge {
+        animation: aha-vacuum-badge 2.2s linear infinite;
+      }
+      .hero.returning .hero-badge {
+        animation: aha-vacuum-return 1.5s ease-in-out infinite;
+      }
+      .hero-copy {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .hero-state {
+        font-size: 24px;
+        font-weight: 650;
+        letter-spacing: -0.03em;
+      }
+      .hero-sub {
+        font-size: 14px;
+        color: var(--sheet-sub);
+      }
+      .pill-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 16px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--sheet-sub);
+        font-size: 12px;
+      }
+      .pill strong {
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .pill.accent {
+        background: color-mix(in srgb, var(--sheet-accent) 32%, rgba(255, 255, 255, 0.06));
+        color: rgba(12, 12, 13, 0.72);
+      }
+      .pill.accent strong { color: #0f1115; }
+      .section-title {
+        margin: 18px 0 10px;
+        font-size: 13px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--sheet-sub);
+      }
+      .grid-btns {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .grid-btns button,
+      .room-action,
+      .more {
+        font-family: inherit;
+      }
+      .grid-btns button,
+      .room-action {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 88px;
+        padding: 16px 12px;
+        border: none;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+        cursor: pointer;
+        --mdc-icon-size: 24px;
+        transition: transform 0.24s ease, background 0.24s ease;
+      }
+      .grid-btns button:hover,
+      .room-action:hover {
+        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.12);
+      }
+      .action-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .room-action {
+        min-height: 92px;
+        align-items: flex-start;
+        justify-content: flex-end;
+        text-align: left;
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.03)),
+          rgba(255, 255, 255, 0.06);
+      }
+      .room-action span {
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.2;
+      }
+      .more {
+        margin-top: 20px;
+        width: 100%;
+        padding: 14px;
+        border: none;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--sheet-accent);
+        font-size: 15px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      @keyframes aha-vacuum-sheen {
+        0% { transform: translateX(-10%) rotate(14deg); }
+        100% { transform: translateX(220%) rotate(14deg); }
+      }
+      @keyframes aha-vacuum-badge {
+        0% { transform: rotate(0deg) translateY(0); }
+        25% { transform: rotate(8deg) translateY(-2px); }
+        50% { transform: rotate(0deg) translateY(0); }
+        75% { transform: rotate(-8deg) translateY(2px); }
+        100% { transform: rotate(0deg) translateY(0); }
+      }
+      @keyframes aha-vacuum-return {
+        0%, 100% { transform: translateX(0); }
+        50% { transform: translateX(4px); }
+      }
+      @media (max-width: 480px) {
+        .sheet { padding: 10px 16px 18px; }
+        .grid-btns {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 10px;
+        }
+        .action-grid { gap: 10px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .sheet,
+        .backdrop,
+        .hero::after,
+        .hero-badge,
+        .grid-btns button,
+        .room-action {
+          transition-duration: 0.01ms !important;
+          animation: none !important;
+        }
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-vacuum-sheet", AppleHomeVacuumSheet);
+
+class AppleHomeVacuumCard extends LitElement {
+  static get properties() {
+    return {
+      hass: {},
+      _config: { state: true },
+      _pressed: { state: true },
+      _pop: { state: true },
+    };
+  }
+
+  static getStubConfig(hass) {
+    const vacuum = Object.keys(hass.states).find((e) => e.startsWith("vacuum."));
+    return { entity: vacuum || "" };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error("You must define a vacuum entity");
+    this._config = { actions: [], ...config };
+  }
+
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(this, changed, this._entityIds(), ["_pressed", "_pop"]);
+  }
+
+  updated(changed) {
+    if (changed.has("hass") && this._sheet && this.hass) this._sheet.hass = this.hass;
+    const s = this._stateObj;
+    if (!s) return;
+    const cleaning = s.state === "cleaning";
+    if (this._prevCleaning !== undefined && cleaning !== this._prevCleaning) {
+      this._pop = cleaning ? "cleaning" : "idle";
+      window.clearTimeout(this._popTimer);
+      this._popTimer = window.setTimeout(() => (this._pop = null), 650);
+    }
+    this._prevCleaning = cleaning;
+  }
+
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".badge");
+    LightField.register(this._badge);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._sheet) this._sheet.close();
+    if (this._badge) LightField.unregister(this._badge);
+  }
+
+  getCardSize() {
+    return 2;
+  }
+
+  getGridOptions() {
+    return gridFor(this._config && this._config.size, { columns: 4, rows: 3 });
+  }
+
+  _entityIds() {
+    const ids = [this._config.entity, this._config.battery_entity, this._config.status_entity];
+    (this._config.actions || []).forEach((action) => ids.push(action.entity || action.entity_id));
+    return [...new Set(ids.filter(Boolean))];
+  }
+
+  get _stateObj() {
+    return this.hass ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  get _batteryObj() {
+    return this.hass && this._config.battery_entity ? this.hass.states[this._config.battery_entity] : undefined;
+  }
+
+  get _statusObj() {
+    return this.hass && this._config.status_entity ? this.hass.states[this._config.status_entity] : undefined;
+  }
+
+  _batteryPct() {
+    const s = this._stateObj;
+    const direct = s && s.attributes.battery_level;
+    if (direct != null && !Number.isNaN(Number(direct))) return Math.round(Number(direct));
+    const sensor = this._batteryObj;
+    if (!sensor) return null;
+    const n = Number(sensor.state);
+    return Number.isNaN(n) ? null : Math.round(n);
+  }
+
+  _statusText() {
+    const sensor = this._statusObj;
+    if (sensor && !["unknown", "unavailable", "none"].includes(sensor.state)) {
+      return describeEntityState(sensor, isEntityOn(sensor));
+    }
+    const s = this._stateObj;
+    return s ? describeVacuumState(s.state) : "Unavailable";
+  }
+
+  _actionConfigs() {
+    return Array.isArray(this._config.actions) ? this._config.actions : [];
+  }
+
+  _accent() {
+    return this._config.color || DOMAIN_ACCENT.vacuum;
+  }
+
+  _openSheet() {
+    if (this._sheet || !this.hass) return;
+    const sheet = document.createElement("apple-home-vacuum-sheet");
+    sheet.hass = this.hass;
+    sheet.entityId = this._config.entity;
+    sheet.heading = this._config.name || getEntityDisplayName(this._stateObj, this._config.entity);
+    sheet.accent = this._accent();
+    sheet.batteryEntity = this._config.battery_entity;
+    sheet.statusEntity = this._config.status_entity;
+    sheet.actions = this._actionConfigs();
+    sheet.addEventListener("sheet-closed", () => (this._sheet = undefined));
+    document.body.appendChild(sheet);
+    this._sheet = sheet;
+    requestAnimationFrame(() => sheet.show());
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const s = this._stateObj;
+    if (!s) {
+      return html`<ha-card><div class="tile unavailable"><div class="name">${this._config.entity}</div><div class="state">Not found</div></div></ha-card>`;
+    }
+    const cleaning = s.state === "cleaning";
+    const active = ["cleaning", "returning"].includes(s.state);
+    const battery = this._batteryPct();
+    const status = this._statusText();
+    const accent = this._accent();
+    const icon = this._config.icon || "mdi:robot-vacuum";
+    const rooms = this._actionConfigs().length;
+    return html`
+      <ha-card style="--accent:${accent}">
+        <div
+          class="tile ${active ? "on" : "off"} ${cleaning ? "cleaning" : ""}"
+          ?data-pressed=${this._pressed}
+          data-pop=${this._pop || "none"}
+          @pointerdown=${() => (this._pressed = true)}
+          @pointerup=${() => { this._pressed = false; this._openSheet(); }}
+          @pointerleave=${() => (this._pressed = false)}
+          role="button"
+          tabindex="0"
+          @keydown=${(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              this._openSheet();
+            }
+          }}
+        >
+          <div class="wash"></div>
+          ${battery != null ? html`<div class="corner-pill">${battery}%</div>` : ""}
+          <div class="content">
+            <div class="badge"><ha-icon icon=${icon}></ha-icon></div>
+            <div class="copy">
+              <div class="name">${this._config.name || getEntityDisplayName(s, this._config.entity)}</div>
+              <div class="state">${status}</div>
+            </div>
+            <div class="meta">
+              ${rooms ? html`<span class="meta-pill">${rooms} room${rooms == 1 ? "" : "s"}</span>` : ""}
+              <span class="meta-pill">Tap to open</span>
+            </div>
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      ${GLASS_BADGE_CSS}
+      :host {
+        display: block;
+        height: 100%;
+        container-type: inline-size;
+        container-name: ahavacuum;
+      }
+      ha-card {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        height: 100%;
+        overflow: visible;
+      }
+      .tile {
+        position: relative;
+        min-height: 108px;
+        height: 100%;
+        border-radius: 26px;
+        overflow: hidden;
+        cursor: pointer;
+        background: rgba(120, 120, 128, 0.16);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.1);
+        transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2), background 0.32s ease, box-shadow 0.32s ease;
+        outline: none;
+      }
+      .tile.on {
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04)),
+          color-mix(in srgb, var(--accent) 42%, rgba(120, 120, 128, 0.12));
+      }
+      .tile[data-pressed] {
+        transform: scale(0.97);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.12);
+      }
+      .tile:focus-visible {
+        box-shadow: 0 0 0 3px var(--accent), 0 8px 24px rgba(0,0,0,0.14);
+      }
+      .wash {
+        position: absolute;
+        inset: -45%;
+        background: radial-gradient(circle at center, rgba(255,255,255,0.3), rgba(255,255,255,0) 58%);
+        opacity: 0;
+        transform: translateX(-30%);
+        pointer-events: none;
+      }
+      .tile.cleaning .wash {
+        opacity: 1;
+        animation: aha-vacuum-sweep 3s linear infinite;
+      }
+      .corner-pill {
+        position: absolute;
+        top: 14px;
+        right: 14px;
+        z-index: 1;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.88);
+        color: #111;
+        font-family: ${FONT_STACK_CSS};
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+      }
+      .content {
+        position: relative;
+        height: 100%;
+        box-sizing: border-box;
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .badge {
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: rgba(120,120,128,0.26);
+        color: var(--primary-text-color);
+        --mdc-icon-size: 24px;
+        transition: background 0.32s ease, color 0.32s ease;
+      }
+      .tile.on .badge {
+        background: rgba(255,255,255,0.92);
+        color: #111;
+      }
+      .copy {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }
+      .name {
+        font-family: ${FONT_STACK_CSS};
+        font-size: 18px;
+        font-weight: 650;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        color: var(--primary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .state {
+        font-family: ${FONT_STACK_CSS};
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--secondary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tile.on .name,
+      .tile.on .state {
+        color: #111;
+      }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .meta-pill {
+        padding: 7px 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.12);
+        color: inherit;
+        font-family: ${FONT_STACK_CSS};
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .tile.on .meta-pill {
+        background: rgba(255,255,255,0.5);
+      }
+      .tile[data-pop="cleaning"] {
+        animation: aha-vacuum-start 0.58s cubic-bezier(0.22, 0.9, 0.24, 1.16);
+      }
+      .tile[data-pop="cleaning"] .badge {
+        animation: aha-vacuum-badge-pop 0.58s cubic-bezier(0.22, 0.9, 0.24, 1.16);
+      }
+      @container ahavacuum (max-width: 170px) {
+        .content { padding: 14px; }
+        .badge { width: 36px; height: 36px; --mdc-icon-size: 20px; }
+        .name { font-size: 15px; }
+        .state { font-size: 12px; }
+        .meta-pill { font-size: 11px; padding: 6px 8px; }
+      }
+      @keyframes aha-vacuum-sweep {
+        0% { transform: translateX(-30%); }
+        100% { transform: translateX(30%); }
+      }
+      @keyframes aha-vacuum-start {
+        0% { transform: scale(1); }
+        40% { transform: scale(1.03); }
+        100% { transform: scale(1); }
+      }
+      @keyframes aha-vacuum-badge-pop {
+        0% { transform: scale(1); }
+        45% { transform: scale(1.14) rotate(8deg); }
+        100% { transform: scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .tile,
+        .wash,
+        .badge {
+          transition-duration: 0.01ms !important;
+          animation: none !important;
+        }
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-vacuum-card", AppleHomeVacuumCard);
+
+class AppleHomeFanCard extends LitElement {
+  static get properties() {
+    return {
+      hass: {},
+      _config: { state: true },
+      _pressed: { state: true },
+      _pop: { state: true },
+    };
+  }
+
+  static getStubConfig(hass) {
+    const fan = Object.keys(hass.states).find((e) => e.startsWith("fan."));
+    return { entity: fan || "" };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error("You must define a fan entity");
+    this._config = config;
+  }
+
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(this, changed, [this._config.entity], ["_pressed", "_pop"]);
+  }
+
+  updated(changed) {
+    if (changed.has("hass") && this._sheet && this.hass) this._sheet.hass = this.hass;
+    const s = this._stateObj;
+    if (!s) return;
+    const on = s.state === "on";
+    if (this._prevOn !== undefined && on !== this._prevOn) {
+      this._pop = on ? "on" : "off";
+      window.clearTimeout(this._popTimer);
+      this._popTimer = window.setTimeout(() => (this._pop = null), 520);
+    }
+    this._prevOn = on;
+  }
+
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".badge");
+    LightField.register(this._badge);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._sheet) this._sheet.close();
+    if (this._badge) LightField.unregister(this._badge);
+  }
+
+  getCardSize() {
+    return 2;
+  }
+
+  getGridOptions() {
+    return gridFor(this._config && this._config.size, { columns: 4, rows: 3 });
+  }
+
+  get _stateObj() {
+    return this.hass ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  _accent() {
+    return this._config.color || DOMAIN_ACCENT.fan;
+  }
+
+  _statusText(s) {
+    return describeEntityState(s, s && s.state === "on");
+  }
+
+  _hasPercentage(s) {
+    return !!(s && (s.attributes.percentage != null || s.attributes.percentage_step != null));
+  }
+
+  _percentage(s) {
+    return s && s.attributes.percentage != null ? Number(s.attributes.percentage) : 0;
+  }
+
+  _stepAmount(s) {
+    const step = s && Number(s.attributes.percentage_step);
+    return Number.isFinite(step) && step > 0 ? step : 25;
+  }
+
+  _togglePower() {
+    const s = this._stateObj;
+    if (!s) return;
+    this.hass.callService("fan", s.state === "on" ? "turn_off" : "turn_on", {
+      entity_id: this._config.entity,
+    });
+  }
+
+  _setPercentage(value) {
+    const pct = Math.max(0, Math.min(100, Math.round(value)));
+    if (pct <= 0) {
+      this.hass.callService("fan", "turn_off", { entity_id: this._config.entity });
+      return;
+    }
+    this.hass.callService("fan", "set_percentage", {
+      entity_id: this._config.entity,
+      percentage: pct,
+    });
+  }
+
+  _step(delta) {
+    const s = this._stateObj;
+    if (!s) return;
+    const next = this._percentage(s) + delta * this._stepAmount(s);
+    this._setPercentage(next);
+  }
+
+  _openSheet() {
+    if (this._sheet) return;
+    this._sheet = createSheet(this.hass, this._config.entity, this._accent(), () => (this._sheet = undefined));
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const s = this._stateObj;
+    if (!s) {
+      return html`<ha-card><div class="tile unavailable"><div class="name">${this._config.entity}</div><div class="state">Not found</div></div></ha-card>`;
+    }
+    const on = s.state === "on";
+    const accent = this._accent();
+    const preset = s.attributes.preset_mode;
+    const oscillating = s.attributes.oscillating;
+    const direction = s.attributes.direction;
+    const hasPct = this._hasPercentage(s);
+    const pct = this._percentage(s);
+    const speedLabel = hasPct && on ? `${pct}%` : this._statusText(s);
+    return html`
+      <ha-card style="--accent:${accent}">
+        <div
+          class="tile ${on ? "on" : "off"}"
+          ?data-pressed=${this._pressed}
+          data-pop=${this._pop || "none"}
+          role="button"
+          tabindex="0"
+          @pointerdown=${() => (this._pressed = true)}
+          @pointerup=${() => (this._pressed = false)}
+          @pointerleave=${() => (this._pressed = false)}
+          @click=${() => this._openSheet()}
+          @keydown=${(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              this._openSheet();
+            }
+          }}
+        >
+          <div class="wash"></div>
+          <div class="content">
+            <div class="top">
+              <div class="badge">
+                <ha-icon class="blade ${on ? "spin" : ""}" icon=${this._config.icon || "mdi:fan"}></ha-icon>
+              </div>
+              <div class="copy">
+                <div class="name">${this._config.name || getEntityDisplayName(s, this._config.entity)}</div>
+                <div class="state">${speedLabel}</div>
+              </div>
+            </div>
+
+            <div class="meta">
+              ${preset ? html`<span class="meta-pill">${capitalizeText(preset)}</span>` : ""}
+              ${oscillating ? html`<span class="meta-pill">Swing</span>` : ""}
+              ${direction ? html`<span class="meta-pill">${capitalizeText(direction)}</span>` : ""}
+            </div>
+
+            <div class="actions" @click=${(e) => e.stopPropagation()}>
+              ${hasPct
+                ? html`
+                    <button class="control mini" aria-label="Decrease speed" @click=${() => this._step(-1)}>
+                      <ha-icon icon="mdi:minus"></ha-icon>
+                    </button>
+                    <button class="control power ${on ? "on" : ""}" @click=${() => this._togglePower()}>
+                      <ha-icon icon=${on ? "mdi:power" : "mdi:play"}></ha-icon>
+                      <span>${on ? "Turn Off" : "Turn On"}</span>
+                    </button>
+                    <button class="control mini" aria-label="Increase speed" @click=${() => this._step(1)}>
+                      <ha-icon icon="mdi:plus"></ha-icon>
+                    </button>
+                  `
+                : html`
+                    <button class="control power wide ${on ? "on" : ""}" @click=${() => this._togglePower()}>
+                      <ha-icon icon=${on ? "mdi:power" : "mdi:play"}></ha-icon>
+                      <span>${on ? "Turn Off" : "Turn On"}</span>
+                    </button>
+                  `}
+            </div>
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      ${GLASS_BADGE_CSS}
+      :host {
+        display: block;
+        height: 100%;
+        container-type: inline-size;
+        container-name: ahafan;
+      }
+      ha-card {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        height: 100%;
+      }
+      .tile {
+        position: relative;
+        min-height: 108px;
+        height: 100%;
+        border-radius: 26px;
+        overflow: hidden;
+        cursor: pointer;
+        background: rgba(120, 120, 128, 0.16);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.1);
+        transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2), background 0.32s ease;
+      }
+      .tile.on {
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.04)),
+          color-mix(in srgb, var(--accent) 36%, rgba(120, 120, 128, 0.12));
+      }
+      .tile[data-pressed] { transform: scale(0.97); }
+      .wash {
+        position: absolute;
+        inset: -40% -10%;
+        background: radial-gradient(circle at top center, rgba(255,255,255,0.22), rgba(255,255,255,0) 58%);
+        opacity: 0;
+        pointer-events: none;
+      }
+      .tile.on .wash { opacity: 1; }
+      .content {
+        position: relative;
+        height: 100%;
+        box-sizing: border-box;
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      .top {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 0;
+      }
+      .badge {
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: rgba(120,120,128,0.26);
+        color: var(--primary-text-color);
+        --mdc-icon-size: 24px;
+        transition: background 0.32s ease, color 0.32s ease;
+      }
+      .tile.on .badge {
+        background: rgba(255,255,255,0.92);
+        color: #111;
+      }
+      .blade.spin {
+        display: inline-flex;
+        animation: aha-fan-card-spin 1.1s linear infinite;
+      }
+      .copy {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        min-width: 0;
+      }
+      .name {
+        font-family: ${FONT_STACK_CSS};
+        font-size: 18px;
+        font-weight: 650;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        color: var(--primary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .state {
+        font-family: ${FONT_STACK_CSS};
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--secondary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .tile.on .name,
+      .tile.on .state { color: #111; }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .meta-pill {
+        padding: 7px 10px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.12);
+        color: inherit;
+        font-family: ${FONT_STACK_CSS};
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .tile.on .meta-pill { background: rgba(255,255,255,0.48); }
+      .actions {
+        display: grid;
+        grid-template-columns: 40px minmax(0, 1fr) 40px;
+        gap: 10px;
+      }
+      .control {
+        min-height: 40px;
+        border: none;
+        border-radius: 14px;
+        background: rgba(255,255,255,0.12);
+        color: inherit;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        font-family: ${FONT_STACK_CSS};
+        font-size: 13px;
+        font-weight: 650;
+        transition: transform 0.24s ease, background 0.24s ease;
+        --mdc-icon-size: 18px;
+      }
+      .control:hover { transform: translateY(-1px); }
+      .control.power.on {
+        background: rgba(255,255,255,0.9);
+        color: #111;
+      }
+      .control.wide {
+        grid-column: 1 / -1;
+      }
+      .tile[data-pop="on"] .badge {
+        animation: aha-fan-card-pop 0.5s cubic-bezier(0.2, 0.8, 0.3, 1.2);
+      }
+      @container ahafan (max-width: 180px) {
+        .content { padding: 14px; }
+        .badge { width: 36px; height: 36px; --mdc-icon-size: 20px; }
+        .name { font-size: 15px; }
+        .state { font-size: 12px; }
+        .actions { gap: 8px; grid-template-columns: 36px minmax(0, 1fr) 36px; }
+        .control { min-height: 36px; font-size: 12px; }
+      }
+      @keyframes aha-fan-card-spin { to { transform: rotate(360deg); } }
+      @keyframes aha-fan-card-pop {
+        0% { transform: scale(1); }
+        45% { transform: scale(1.14); }
+        100% { transform: scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .tile,
+        .blade,
+        .badge,
+        .control {
+          transition-duration: 0.01ms !important;
+          animation: none !important;
+        }
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-fan-card", AppleHomeFanCard);
+
+class AppleHomeChip extends LitElement {
+  static get properties() {
+    return {
+      hass: {},
+      _config: { state: true },
+      _pressed: { state: true },
+    };
+  }
+
+  static getStubConfig(hass) {
+    const entity = Object.keys(hass.states).find((e) => e.startsWith("sensor.")) || "";
+    return { entity };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error("You must define an entity");
+    this._config = {
+      show_state: true,
+      show_icon: true,
+      tint: true,
+      tap_action: { action: "more-info" },
+      ...config,
+    };
+  }
+
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(this, changed, [this._config.entity], ["_pressed"]);
+  }
+
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".icon-badge");
+    LightField.register(this._badge);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._badge) LightField.unregister(this._badge);
+  }
+
+  getCardSize() {
+    return 1;
+  }
+
+  getGridOptions() {
+    return { columns: 2, rows: 1, min_columns: 1, min_rows: 1 };
+  }
+
+  get _stateObj() {
+    return this.hass ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  _accent(stateObj) {
+    const domain = stateObj ? domainOf(stateObj.entity_id) : domainOf(this._config.entity);
+    return this._config.color || DOMAIN_ACCENT[domain] || DOMAIN_ACCENT._default;
+  }
+
+  _moreInfo() {
+    const e = new Event("hass-more-info", { bubbles: true, composed: true });
+    e.detail = { entityId: this._config.entity };
+    this.dispatchEvent(e);
+  }
+
+  _toggleEntity() {
+    const stateObj = this._stateObj;
+    if (!stateObj) return;
+    const behavior = DOMAIN_BEHAVIOR[domainOf(stateObj.entity_id)];
+    if (!behavior || !behavior.toggle) {
+      this._moreInfo();
+      return;
+    }
+    const spec = typeof behavior.toggle === "function" ? behavior.toggle(stateObj) : behavior.toggle;
+    this.hass.callService(spec[0], spec[1], { entity_id: stateObj.entity_id });
+  }
+
+  _runAction(actionConfig) {
+    const action = actionConfig || { action: "more-info" };
+    switch (action.action) {
+      case "none":
+        return;
+      case "toggle":
+        this._toggleEntity();
+        return;
+      case "navigate":
+        if (action.navigation_path) {
+          history.pushState(null, "", action.navigation_path);
+          const e = new Event("location-changed", { bubbles: true, composed: true });
+          e.detail = { replace: false };
+          this.dispatchEvent(e);
+        }
+        return;
+      case "url":
+        if (action.url_path) window.open(action.url_path);
+        return;
+      case "call-service":
+      case "perform-action":
+        callConfiguredAction(this.hass, action);
+        return;
+      case "controls":
+      case "more-info":
+      default:
+        this._moreInfo();
+    }
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const stateObj = this._stateObj;
+    if (!stateObj) {
+      return html`<ha-card><button class="chip"><span class="label">${this._config.entity}</span><span class="value">Not found</span></button></ha-card>`;
+    }
+    const accent = this._accent(stateObj);
+    const label = this._config.name || getEntityDisplayName(stateObj, this._config.entity);
+    const value = this._config.state_text || describeEntityState(stateObj, isEntityOn(stateObj));
+    const active = isEntityOn(stateObj);
+    const tinted = this._config.tint !== false;
+    return html`
+      <ha-card style="--accent:${accent}">
+        <button
+          class="chip ${active ? "on" : "off"} ${tinted ? "tinted" : ""}"
+          ?data-pressed=${this._pressed}
+          @pointerdown=${() => (this._pressed = true)}
+          @pointerup=${() => (this._pressed = false)}
+          @pointerleave=${() => (this._pressed = false)}
+          @click=${() => this._runAction(this._config.tap_action)}
+        >
+          ${this._config.show_icon !== false
+            ? html`
+                <span class="icon-badge">
+                  <ha-state-icon
+                    .hass=${this.hass}
+                    .stateObj=${stateObj}
+                    .icon=${this._config.icon || undefined}
+                  ></ha-state-icon>
+                </span>
+              `
+            : ""}
+          <span class="label">${label}</span>
+          ${this._config.show_state !== false ? html`<span class="value">${value}</span>` : ""}
+        </button>
+      </ha-card>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      ${GLASS_BADGE_CSS}
+      :host {
+        display: block;
+        height: 100%;
+        container-type: inline-size;
+        container-name: ahachip;
+      }
+      ha-card {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        height: 100%;
+      }
+      .chip {
+        width: 100%;
+        min-height: 52px;
+        padding: 10px 12px;
+        border: none;
+        border-radius: 18px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(120, 120, 128, 0.14);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 6px 18px rgba(0,0,0,0.08);
+        cursor: pointer;
+        transition: transform 0.24s ease, background 0.24s ease;
+        text-align: left;
+        font-family: ${FONT_STACK_CSS};
+      }
+      .chip.tinted {
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.14), rgba(255,255,255,0.04)),
+          color-mix(in srgb, var(--accent) 18%, rgba(120, 120, 128, 0.14));
+      }
+      .chip.on {
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.04)),
+          color-mix(in srgb, var(--accent) 42%, rgba(120, 120, 128, 0.12));
+      }
+      .chip[data-pressed] { transform: scale(0.98); }
+      .icon-badge {
+        width: 28px;
+        height: 28px;
+        flex: none;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: rgba(255,255,255,0.72);
+        color: #111;
+        --mdc-icon-size: 16px;
+      }
+      .label {
+        min-width: 0;
+        font-size: 13px;
+        font-weight: 650;
+        line-height: 1.15;
+        color: var(--primary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .value {
+        margin-left: auto;
+        min-width: 0;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--secondary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .chip.on .label,
+      .chip.on .value { color: #111; }
+      @container ahachip (max-width: 170px) {
+        .chip { padding: 9px 10px; gap: 8px; }
+        .label { font-size: 12px; }
+        .value { font-size: 11px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .chip { transition-duration: 0.01ms !important; }
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-chip", AppleHomeChip);
 
 class AppleHomePager extends LitElement {
   static get properties() {
@@ -3199,7 +5037,15 @@ class AppleHomeGroup extends LitElement {
       .sub { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); }
       .chev { position: absolute; top: 14px; right: 12px; color: var(--secondary-text-color); --mdc-icon-size: 20px; }
       @container ahatile (max-width: 132px) {
-        .name { font-size: 13px; } .sub { font-size: 11px; }
+        .name {
+          font-size: 13px;
+          line-height: 1.12;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+        }
+        .sub { font-size: 11px; }
         .badge { width: 32px; height: 32px; --mdc-icon-size: 18px; }
       }
     `;
@@ -3324,6 +5170,27 @@ window.customCards.push(
     type: "apple-home-graph-card",
     name: "Apple Home Graph",
     description: "Current value + sparkline history for temperature, humidity, air quality, etc.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-vacuum-card",
+    name: "Apple Home Vacuum",
+    description: "Dedicated vacuum tile with an animated cleaning state and quick room actions.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-fan-card",
+    name: "Apple Home Fan",
+    description: "Dedicated fan tile with speed controls and a fan detail sheet.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-chip",
+    name: "Apple Home Chip",
+    description: "Compact standalone status chips for battery, mode, presence, and sensor state.",
     preview: true,
     documentationURL: DOCS_URL,
   },

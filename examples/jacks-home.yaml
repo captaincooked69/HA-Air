@@ -144,7 +144,7 @@ views:
           - type: custom:apple-home-area-card
             name: Living Room
             icon: mdi:sofa
-            navigation_path: /lovelace/rooms
+            navigation_path: /dashboard-pretty/rooms
             entities:
               - light.living_room_1
               - light.living_room_lamp
@@ -152,26 +152,26 @@ views:
           - type: custom:apple-home-area-card
             name: Bedroom
             icon: mdi:bed
-            navigation_path: /lovelace/rooms
+            navigation_path: /dashboard-pretty/rooms
             entities:
               - light.bedroom
           - type: custom:apple-home-area-card
             name: Hallway & Stairs
             icon: mdi:stairs
-            navigation_path: /lovelace/rooms
+            navigation_path: /dashboard-pretty/rooms
             entities:
               - light.hallway
               - light.stairs
           - type: custom:apple-home-area-card
             name: Garage
             icon: mdi:garage
-            navigation_path: /lovelace/rooms
+            navigation_path: /dashboard-pretty/rooms
             entities:
               - light.garage
           - type: custom:apple-home-area-card
             name: Office
             icon: mdi:printer-3d
-            navigation_path: /lovelace/rooms
+            navigation_path: /dashboard-pretty/rooms
             entities:
               - light.3d_printing_lights
               - switch.prusa_core_one
@@ -190,6 +190,8 @@ views:
             entity: weather.forecast_home
             name: Home
             size: large
+            forecast_days: 7
+            animated: true
           - type: custom:apple-home-card
             entity: sensor.raxe300_gateway_download_speed
             name: Download
@@ -449,24 +451,26 @@ views:
             heading: Rocky (Vacuum)
             heading_style: title
             icon: mdi:robot-vacuum
-          - type: custom:apple-home-card
+          - type: custom:apple-home-vacuum-card
             entity: vacuum.rocky
             name: Rocky
             icon: mdi:robot-vacuum
-          - type: custom:apple-home-card
-            entity: button.living_room_rocky_full_cleaning
-            name: Full Clean
-            icon: mdi:broom
-            color: "#64d2ff"
-          - type: custom:apple-home-card
+            battery_entity: sensor.rocky_battery
+            status_entity: sensor.rocky_status
+            actions:
+              - entity: button.living_room_rocky_full_cleaning
+                label: Living Room
+                icon: mdi:sofa-outline
+          - type: custom:apple-home-chip
             entity: sensor.rocky_battery
             name: Battery
             icon: mdi:battery
             color: "#30d158"
-          - type: custom:apple-home-card
+          - type: custom:apple-home-chip
             entity: sensor.rocky_status
             name: Status
             icon: mdi:information
+            color: "#64d2ff"
 
       - type: grid
         cards:

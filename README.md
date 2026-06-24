@@ -43,13 +43,16 @@ An Apple Home–inspired tile card for [Home Assistant](https://www.home-assista
 
 ## Card types
 
-The package ships four cards, all sharing the same frosted look and the detail sheet:
+The package ships several cards, all sharing the same frosted look and the detail sheet where it makes sense:
 
 | Card | For | Notes |
 |------|-----|-------|
 | `custom:apple-home-card` | Anything | The universal accessory tile. |
 | `custom:apple-home-media-card` | `media_player` | Wide tile: artwork background + inline ⏮ ⏯ ⏭. |
 | `custom:apple-home-climate-card` | `climate` | Current/target temperature with inline − / +. |
+| `custom:apple-home-vacuum-card` | `vacuum` | Dedicated vacuum tile with a richer sheet, animated cleaning state, and quick room actions. |
+| `custom:apple-home-fan-card` | `fan` | Dedicated fan tile with direct power/speed controls and a fan detail sheet. |
+| `custom:apple-home-chip` | Compact status entities | Small standalone glass chips for battery, mode, presence, and sensor status. |
 | `custom:apple-home-area-card` | A group of entities | Room summary ("2 of 3 on"); tap toggles the group or navigates. |
 | `custom:apple-home-weather-card` | `weather` | Condition + temperature + forecast strip; condition-aware gradient. |
 | `custom:apple-home-graph-card` | numeric `sensor` | Current value + sparkline of recent history. |
@@ -83,8 +86,45 @@ entities:               # used for the "N of M on" summary + group toggle
   - light.living_room
   - light.lamp
   - switch.tv
-# navigation_path: /lovelace/living-room   # optional: tap navigates instead of toggling
+# navigation_path: /dashboard-pretty/living-room   # optional: tap navigates instead of toggling
+# for named dashboards, use /dashboard-your-slug/view-path instead of /lovelace/...
 ```
+
+### Vacuum tile
+
+```yaml
+type: custom:apple-home-vacuum-card
+entity: vacuum.rocky
+name: Rocky
+battery_entity: sensor.rocky_battery
+status_entity: sensor.rocky_status
+actions:
+  - entity: button.living_room_rocky_full_cleaning
+    label: Living Room
+    icon: mdi:sofa-outline
+```
+
+Tap opens a dedicated vacuum sheet with start/pause, dock, locate, and optional quick room buttons driven by button, script, or service actions.
+
+### Fan tile
+
+```yaml
+type: custom:apple-home-fan-card
+entity: fan.bedroom
+name: Bedroom Fan
+```
+
+### Status chips
+
+```yaml
+type: custom:apple-home-chip
+entity: sensor.rocky_battery
+name: Battery
+icon: mdi:battery
+color: "#30d158"
+```
+
+Use chips for compact battery, mode, presence, and sensor status around larger cards.
 
 ### Background
 
@@ -133,6 +173,8 @@ same way, because each tile is a CSS size container.
 - type: custom:apple-home-weather-card
   entity: weather.home
   size: large
+  forecast_days: 7 # optional, defaults to 7
+  animated: true   # optional, disable to turn off weather motion
 
 - type: custom:apple-home-graph-card
   entity: sensor.living_room_temperature
