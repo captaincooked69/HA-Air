@@ -194,14 +194,47 @@ function getEntityDisplayName(stateObj, fallback) {
   return stateObj ? stateObj.attributes.friendly_name || fallback : fallback;
 }
 
+function buildConfiguredActionCall(action) {
+  if (!action) return null;
+  const svc = action.service || action.perform_action;
+  if (!svc) return null;
+  const [domain, service] = svc.split(".");
+  if (!domain || !service) return null;
+
+  const data = { ...(action.data || action.service_data || {}) };
+  const target = action.target ? { ...action.target } : undefined;
+  const entityId = action.entity || action.entity_id;
+
+  if (entityId) {
+    if (target) {
+      const existing = target.entity_id;
+      if (Array.isArray(existing)) {
+        target.entity_id = existing.includes(entityId) ? existing : [...existing, entityId];
+      } else if (typeof existing === "string") {
+        target.entity_id = existing === entityId ? existing : [existing, entityId];
+      } else if (existing == null && data.entity_id == null) {
+        target.entity_id = entityId;
+      }
+    } else if (data.entity_id == null) {
+      data.entity_id = entityId;
+    }
+  }
+
+  return { domain, service, data, target };
+}
+
+function invokeConfiguredActionService(hass, action) {
+  if (!hass) return false;
+  const call = buildConfiguredActionCall(action);
+  if (!call) return false;
+  hass.callService(call.domain, call.service, call.data, call.target);
+  return true;
+}
+
 function callConfiguredAction(hass, action) {
   if (!hass || !action) return;
-  const svc = action.service || action.perform_action;
-  if (svc) {
-    const [d, s] = svc.split(".");
-    if (d && s) hass.callService(d, s, action.data || action.service_data || {});
-    return;
-  }
+  if (invokeConfiguredActionService(hass, action)) return;
+
   const entityId = action.entity || action.entity_id;
   if (!entityId) return;
   const stateObj = hass.states[entityId];
@@ -217,7 +250,6 @@ function callConfiguredAction(hass, action) {
     ...(action.data || action.service_data || {}),
   });
 }
-
 // Open the Apple Home detail sheet for an entity. Returns the element so the
 // caller can keep feeding it fresh `hass`.
 function createSheet(hass, entityId, accent, onClosed, direction) {
@@ -642,13 +674,9 @@ class AppleHomeCard extends LitElement {
         if (actionConfig.url_path) window.open(actionConfig.url_path);
         return;
       case "call-service":
-      case "perform-action": {
-        const svc = actionConfig.service || actionConfig.perform_action;
-        if (!svc) return;
-        const [d, s] = svc.split(".");
-        this.hass.callService(d, s, actionConfig.data || actionConfig.service_data || {});
+      case "perform-action":
+        invokeConfiguredActionService(this.hass, actionConfig);
         return;
-      }
       default:
         this._moreInfo();
     }
@@ -4011,8 +4039,15 @@ class AppleHomeVacuumCard extends LitElement {
       @container ahavacuum (max-width: 170px) {
         .content { padding: 14px; }
         .badge { width: 36px; height: 36px; --mdc-icon-size: 20px; }
-        .name { font-size: 15px; }
-        .state { font-size: 12px; }
+        .name {
+          font-size: 15px;
+          line-height: 1.12;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+        }
+        .state { font-size: 12px; line-height: 1.12; }
         .meta-pill { font-size: 11px; padding: 6px 8px; }
       }
       @keyframes aha-vacuum-sweep {
@@ -4390,8 +4425,15 @@ class AppleHomeFanCard extends LitElement {
       @container ahafan (max-width: 180px) {
         .content { padding: 14px; }
         .badge { width: 36px; height: 36px; --mdc-icon-size: 20px; }
-        .name { font-size: 15px; }
-        .state { font-size: 12px; }
+        .name {
+          font-size: 15px;
+          line-height: 1.12;
+          white-space: normal;
+          display: -webkit-box;
+          -webkit-box-orient: vertical;
+          -webkit-line-clamp: 2;
+        }
+        .state { font-size: 12px; line-height: 1.12; }
         .actions { gap: 8px; grid-template-columns: 36px minmax(0, 1fr) 36px; }
         .control { min-height: 36px; font-size: 12px; }
       }
