@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.9.2";
+const VERSION = "0.9.3";
 
 /* eslint-disable no-console */
 console.info(
@@ -4692,6 +4692,616 @@ class AppleHomeFanCard extends LitElement {
 
 customElements.define("apple-home-fan-card", AppleHomeFanCard);
 
+// ---------------------------------------------------------------------------
+// Cover tile — becomes the thing it controls: a top-down shade (with venetian
+// slats for blinds/shutters) or a segmented rolling door for garages/gates.
+// Drag vertically to set position, tap to toggle (or stop mid-motion), hold for
+// the detail sheet.
+// ---------------------------------------------------------------------------
+const COVER_FEATURE = {
+  OPEN: 1,
+  CLOSE: 2,
+  SET_POSITION: 4,
+  STOP: 8,
+  OPEN_TILT: 16,
+  CLOSE_TILT: 32,
+  STOP_TILT: 64,
+  SET_TILT_POSITION: 128,
+};
+const COVER_DOOR_CLASSES = ["garage", "gate", "door"];
+const COVER_SLAT_CLASSES = ["blind", "shutter"];
+
+function coverSupports(stateObj, flag) {
+  return (
+    !!stateObj &&
+    (Number(stateObj.attributes.supported_features || 0) & flag) === flag
+  );
+}
+function coverKind(stateObj) {
+  return COVER_DOOR_CLASSES.includes(stateObj && stateObj.attributes.device_class)
+    ? "door"
+    : "shade";
+}
+
+class AppleHomeCoverCard extends LitElement {
+  static get properties() {
+    return {
+      hass: {},
+      _config: { state: true },
+      _pressed: { state: true },
+      _dragging: { state: true },
+      _drag: { state: true }, // live position while dragging (0–100)
+      _pending: { state: true }, // optimistic target after a tap (0–100)
+      _pop: { state: true },
+    };
+  }
+
+  static getStubConfig(hass) {
+    const cover = Object.keys(hass.states).find((e) => e.startsWith("cover."));
+    return { entity: cover || "" };
+  }
+
+  setConfig(config) {
+    if (!config.entity) throw new Error("You must define a cover entity");
+    if (domainOf(config.entity) !== "cover")
+      throw new Error("Entity must be a cover");
+    this._config = { ...config };
+  }
+
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(
+      this,
+      changed,
+      [this._config && this._config.entity],
+      ["_pressed", "_dragging", "_drag", "_pending", "_pop"]
+    );
+  }
+
+  updated(changed) {
+    if (changed.has("hass") && this._sheet && this.hass) this._sheet.hass = this.hass;
+    const s = this._stateObj;
+    if (!s) return;
+    // Drop the optimistic target once HA confirms motion or the position lands.
+    if (this._pending != null) {
+      const movingToward =
+        (this._pending >= 100 && ["open", "opening"].includes(s.state)) ||
+        (this._pending <= 0 && ["closed", "closing"].includes(s.state));
+      const pos = this._positionOf(s);
+      const reached = pos != null && Math.abs(pos - this._pending) <= 1;
+      if (movingToward || reached) {
+        window.clearTimeout(this._pendingTimer);
+        this._pendingTimer = undefined;
+        this._pending = null;
+      }
+    }
+    // Pop the badge when the cover settles after moving.
+    const moving = ["opening", "closing"].includes(s.state);
+    if (this._prevMoving && !moving) {
+      this._pop = s.state;
+      window.clearTimeout(this._popTimer);
+      this._popTimer = window.setTimeout(() => (this._pop = null), 650);
+    }
+    this._prevMoving = moving;
+  }
+
+  firstUpdated() {
+    this._badge = this.renderRoot.querySelector(".badge");
+    LightField.register(this._badge);
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this._sheet && this._sheet.close) this._sheet.close();
+    if (this._badge) LightField.unregister(this._badge);
+    window.clearTimeout(this._holdTimer);
+    window.clearTimeout(this._pendingTimer);
+    window.clearTimeout(this._popTimer);
+  }
+
+  getCardSize() {
+    return 2;
+  }
+
+  getGridOptions() {
+    return gridFor(this._config && this._config.size, { columns: 4, rows: 3 });
+  }
+
+  get _stateObj() {
+    return this.hass && this._config ? this.hass.states[this._config.entity] : undefined;
+  }
+
+  _accent() {
+    return this._config.color || DOMAIN_ACCENT.cover;
+  }
+
+  _positionOf(s) {
+    const p = s && s.attributes.current_position;
+    if (p == null || Number.isNaN(Number(p))) return null;
+    return Math.max(0, Math.min(100, Math.round(Number(p))));
+  }
+
+  _tiltOf(s) {
+    const t = s && s.attributes.current_tilt_position;
+    if (t == null || Number.isNaN(Number(t))) return null;
+    return Math.max(0, Math.min(100, Math.round(Number(t))));
+  }
+
+  // Position to show right now: live drag > optimistic pending > real > inferred.
+  _shownPosition(s) {
+    if (this._drag != null) return this._drag;
+    if (this._pending != null) return this._pending;
+    const real = this._positionOf(s);
+    if (real != null) return real;
+    return ["open", "opening"].includes(s.state) ? 100 : 0;
+  }
+
+  _stateLabel(s) {
+    if (s.state === "unavailable") return "Unavailable";
+    if (s.state === "unknown") return "—";
+    if (this._drag != null) return `${this._drag}% open`;
+    if (s.state === "opening") return "Opening…";
+    if (s.state === "closing") return "Closing…";
+    const pos = this._pending != null ? this._pending : this._positionOf(s);
+    if (pos != null && coverKind(s) !== "door") {
+      if (pos >= 100) return "Open";
+      if (pos <= 0) return "Closed";
+      return `${pos}% open`;
+    }
+    return s.state === "closed" ? "Closed" : "Open";
+  }
+
+  // --- Gestures: tap / hold / vertical drag-to-position --------------------
+  _onPointerDown(e) {
+    this._pressed = true;
+    this._holdFired = false;
+    this._dragging = false;
+    this._downY = e.clientY;
+    this._tileEl = e.currentTarget;
+    const s = this._stateObj;
+    this._canPosition = coverSupports(s, COVER_FEATURE.SET_POSITION);
+    this._posAtDown = this._canPosition ? this._shownPosition(s) : null;
+    try { this._tileEl.setPointerCapture(e.pointerId); } catch (x) {}
+    this._holdTimer = window.setTimeout(() => {
+      if (this._dragging) return;
+      this._holdFired = true;
+      this._haptic("medium");
+      this._openSheet();
+    }, 500);
+  }
+
+  _onPointerMove(e) {
+    if (!this._pressed || !this._canPosition || this._posAtDown == null) return;
+    const dy = this._downY - e.clientY; // drag up = more open
+    if (!this._dragging && Math.abs(dy) < 6) return;
+    this._dragging = true;
+    window.clearTimeout(this._holdTimer);
+    const rect = this._tileEl.getBoundingClientRect();
+    const pct = this._posAtDown + (dy / rect.height) * 100;
+    this._drag = Math.max(0, Math.min(100, Math.round(pct)));
+  }
+
+  _onPointerUp(e) {
+    this._pressed = false;
+    window.clearTimeout(this._holdTimer);
+    try { this._tileEl && this._tileEl.releasePointerCapture(e.pointerId); } catch (x) {}
+    if (this._holdFired) { this._dragging = false; return; }
+    if (this._dragging) {
+      this._dragging = false;
+      if (this._drag != null) {
+        this.hass.callService("cover", "set_cover_position", {
+          entity_id: this._config.entity,
+          position: this._drag,
+        });
+        this._haptic("light");
+      }
+      this._drag = null;
+      return;
+    }
+    this._onTap();
+  }
+
+  _onPointerCancel() {
+    this._pressed = false;
+    this._dragging = false;
+    this._drag = null;
+    window.clearTimeout(this._holdTimer);
+  }
+
+  _haptic(type = "light") {
+    const e = new Event("haptic", { bubbles: true, composed: true });
+    e.detail = type;
+    this.dispatchEvent(e);
+  }
+
+  // Tap: stop while moving, otherwise toggle open/closed (optimistically).
+  _onTap() {
+    const s = this._stateObj;
+    if (!s) return;
+    this._haptic("light");
+    if (
+      ["opening", "closing"].includes(s.state) &&
+      coverSupports(s, COVER_FEATURE.STOP)
+    ) {
+      this.hass.callService("cover", "stop_cover", { entity_id: this._config.entity });
+      return;
+    }
+    const pos = this._positionOf(s);
+    const isOpen =
+      pos != null ? pos > 0 : ["open", "opening"].includes(s.state);
+    this._setPending(isOpen ? 0 : 100);
+    this.hass.callService(
+      "cover",
+      isOpen ? "close_cover" : "open_cover",
+      { entity_id: this._config.entity }
+    );
+  }
+
+  _setPending(target) {
+    this._pending = target;
+    this._pop = target >= 100 ? "open" : "closed";
+    window.clearTimeout(this._popTimer);
+    this._popTimer = window.setTimeout(() => (this._pop = null), 650);
+    window.clearTimeout(this._pendingTimer);
+    this._pendingTimer = window.setTimeout(() => (this._pending = null), 4000);
+  }
+
+  _openSheet() {
+    if (this._sheet || !this.hass) return;
+    this._sheet = createSheet(
+      this.hass,
+      this._config.entity,
+      this._accent(),
+      () => (this._sheet = undefined),
+      "down"
+    );
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const s = this._stateObj;
+    if (!s) {
+      return html`<ha-card><div class="tile unavailable"><div class="content"><div class="copy"><div class="name">${this._config.entity}</div><div class="state">Not found</div></div></div></div></ha-card>`;
+    }
+    const kind = coverKind(s);
+    const pos = this._shownPosition(s);
+    const coverage = Math.max(0, Math.min(100, 100 - pos));
+    const open = pos > 0;
+    const moving = ["opening", "closing"].includes(s.state) && this._drag == null;
+    const slats = COVER_SLAT_CLASSES.includes(s.attributes.device_class);
+    const tilt = this._tiltOf(s);
+    // Slat line thickness: closed tilt (0) ≈ solid, open tilt (100) ≈ thin gaps.
+    const slatThick = tilt == null ? 6 : 2 + (1 - tilt / 100) * 10;
+    const draggable = coverSupports(s, COVER_FEATURE.SET_POSITION);
+
+    return html`
+      <ha-card
+        style="--accent:${this._accent()}; --coverage:${coverage}%; --slat-thick:${slatThick.toFixed(1)}px"
+      >
+        <div
+          class="tile ${kind} ${open ? "on" : "off"} ${moving ? "moving" : ""} ${slats ? "slats" : ""}"
+          ?data-pressed=${this._pressed}
+          ?data-dragging=${this._dragging}
+          ?data-draggable=${draggable}
+          data-pop=${this._pop || "none"}
+          @pointerdown=${this._onPointerDown}
+          @pointermove=${this._onPointerMove}
+          @pointerup=${this._onPointerUp}
+          @pointercancel=${this._onPointerCancel}
+          role="button"
+          tabindex="0"
+          aria-label=${this._config.name || getEntityDisplayName(s, this._config.entity)}
+          @keydown=${(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              this._onTap();
+            }
+          }}
+        >
+          <div class="visual" aria-hidden="true">
+            <div class="pane"></div>
+            <div class="rail"></div>
+          </div>
+          <div class="scrim" aria-hidden="true"></div>
+          ${draggable
+            ? html`<div class="grip" aria-hidden="true"><span></span></div>`
+            : ""}
+          <div class="content">
+            <div class="badge">
+              <ha-state-icon
+                .hass=${this.hass}
+                .stateObj=${s}
+                .icon=${this._config.icon}
+              ></ha-state-icon>
+            </div>
+            <div class="copy">
+              <div class="name">
+                ${this._config.name || getEntityDisplayName(s, this._config.entity)}
+              </div>
+              <div class="state">${this._stateLabel(s)}</div>
+            </div>
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      ${GLASS_BADGE_CSS}
+      :host {
+        display: block;
+        height: 100%;
+        container-type: inline-size;
+        container-name: ahacover;
+      }
+      ha-card {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        height: 100%;
+        overflow: visible;
+      }
+      .tile {
+        position: relative;
+        min-height: 108px;
+        height: 100%;
+        border-radius: 26px;
+        overflow: hidden;
+        cursor: pointer;
+        touch-action: pan-x;
+        background: rgba(120, 120, 128, 0.16);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
+        transition: transform 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2),
+          box-shadow 0.32s ease;
+        outline: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      .tile[data-pressed] {
+        transform: scale(0.97);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+      }
+      .tile:focus-visible {
+        box-shadow: 0 0 0 3px var(--accent), 0 8px 24px rgba(0, 0, 0, 0.14);
+      }
+
+      /* The covering itself, descending from the top by --coverage. */
+      .visual {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+      }
+      .pane {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: var(--coverage);
+        background: linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.16),
+            rgba(255, 255, 255, 0)
+          ),
+          color-mix(in srgb, var(--accent) 48%, rgba(120, 120, 128, 0.22));
+        box-shadow: 0 6px 14px rgba(0, 0, 0, 0.18);
+        transition: height 0.55s cubic-bezier(0.22, 0.9, 0.24, 1);
+      }
+      .rail {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: var(--coverage);
+        height: 3px;
+        transform: translateY(-1.5px);
+        background: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 1px 5px rgba(0, 0, 0, 0.28);
+        transition: top 0.55s cubic-bezier(0.22, 0.9, 0.24, 1);
+      }
+      .tile[data-dragging] .pane,
+      .tile[data-dragging] .rail {
+        transition: none;
+      }
+
+      /* Venetian slats for blinds/shutters; thickness driven by tilt. */
+      .tile.slats .pane::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.24) 0,
+          rgba(0, 0, 0, 0.24) var(--slat-thick),
+          rgba(255, 255, 255, 0.14) var(--slat-thick),
+          rgba(255, 255, 255, 0.14) 14px
+        );
+        transition: background 0.4s ease;
+      }
+
+      /* Segmented rolling door for garages/gates. */
+      .tile.door .pane {
+        background: linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.12),
+            rgba(255, 255, 255, 0)
+          ),
+          color-mix(in srgb, var(--accent) 40%, rgba(90, 90, 96, 0.4));
+      }
+      .tile.door .pane::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: repeating-linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.22) 0,
+          rgba(0, 0, 0, 0.22) 1.5px,
+          rgba(255, 255, 255, 0.05) 1.5px,
+          rgba(255, 255, 255, 0.05) 24px
+        );
+      }
+
+      /* Motion: a sweeping highlight (shade) / caution shimmer (door). */
+      .pane::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0) 0%,
+          rgba(255, 255, 255, 0.35) 50%,
+          rgba(255, 255, 255, 0) 100%
+        );
+        pointer-events: none;
+      }
+      .tile.moving .pane::before {
+        opacity: 1;
+        animation: aha-cover-sweep 1.6s ease-in-out infinite;
+      }
+
+      /* Bottom scrim keeps the label legible over the covering. */
+      .scrim {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        pointer-events: none;
+        background: linear-gradient(
+          0deg,
+          rgba(0, 0, 0, 0.28) 0%,
+          rgba(0, 0, 0, 0) 42%
+        );
+      }
+
+      /* Drag affordance on the right edge. */
+      .grip {
+        position: absolute;
+        top: 50%;
+        right: 10px;
+        z-index: 2;
+        transform: translateY(-50%);
+        display: grid;
+        place-items: center;
+        width: 10px;
+        height: 46px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.18);
+        opacity: 0.55;
+        transition: opacity 0.2s ease;
+        pointer-events: none;
+      }
+      .grip span {
+        width: 4px;
+        height: 32px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.9);
+      }
+      .tile[data-dragging] .grip {
+        opacity: 1;
+      }
+
+      .content {
+        position: relative;
+        z-index: 2;
+        height: 100%;
+        box-sizing: border-box;
+        padding: 16px 18px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 12px;
+        pointer-events: none;
+      }
+      .badge {
+        width: 42px;
+        height: 42px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: rgba(255, 255, 255, 0.92);
+        color: #111;
+        --mdc-icon-size: 24px;
+        transition: background 0.32s ease, color 0.32s ease;
+      }
+      .tile.off .badge {
+        background: rgba(120, 120, 128, 0.32);
+        color: var(--primary-text-color);
+      }
+      .copy {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+      }
+      .name {
+        font-family: ${FONT_STACK_CSS};
+        font-size: 18px;
+        font-weight: 650;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        color: #fff;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+        white-space: normal;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        overflow: hidden;
+      }
+      .state {
+        font-family: ${FONT_STACK_CSS};
+        font-size: 14px;
+        font-weight: 550;
+        color: rgba(255, 255, 255, 0.88);
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+      }
+      .tile.off .name,
+      .tile.off .state {
+        color: var(--primary-text-color);
+        text-shadow: none;
+      }
+      .tile.off .state {
+        color: var(--secondary-text-color);
+      }
+
+      .tile[data-pop="open"] .badge,
+      .tile[data-pop="closed"] .badge {
+        animation: aha-cover-pop 0.6s cubic-bezier(0.22, 0.9, 0.24, 1.16);
+      }
+
+      @container ahacover (max-width: 170px) {
+        .content { padding: 14px; }
+        .badge { width: 36px; height: 36px; --mdc-icon-size: 20px; }
+        .name { font-size: 15px; line-height: 1.12; }
+        .state { font-size: 12px; }
+        .grip { height: 38px; }
+      }
+
+      @keyframes aha-cover-sweep {
+        0% { transform: translateY(-60%); opacity: 0; }
+        50% { opacity: 1; }
+        100% { transform: translateY(60%); opacity: 0; }
+      }
+      @keyframes aha-cover-pop {
+        0% { transform: scale(1); }
+        45% { transform: scale(1.16) rotate(-6deg); }
+        100% { transform: scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .tile,
+        .pane,
+        .rail,
+        .badge {
+          transition-duration: 0.01ms !important;
+          animation: none !important;
+        }
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-cover-card", AppleHomeCoverCard);
+
 class AppleHomeChip extends LitElement {
   static get properties() {
     return {
@@ -4926,6 +5536,365 @@ class AppleHomeChip extends LitElement {
 }
 
 customElements.define("apple-home-chip", AppleHomeChip);
+
+// ---------------------------------------------------------------------------
+// Status card — a glanceable panel of room readouts (temperature, humidity,
+// door/window states, motion, leaks, locks…). Each cell auto-formats by domain
+// + device_class and tints amber when something needs attention.
+// ---------------------------------------------------------------------------
+const SENSOR_DC_ACCENT = {
+  temperature: "#ff9f0a",
+  humidity: "#64d2ff",
+  pressure: "#5e5ce6",
+  battery: "#30d158",
+  illuminance: "#ffd60a",
+  carbon_dioxide: "#bf5af2",
+  carbon_monoxide: "#ff453a",
+  pm25: "#bf5af2",
+  pm10: "#bf5af2",
+  power: "#ffd60a",
+  energy: "#30d158",
+  voltage: "#ffd60a",
+  signal_strength: "#64d2ff",
+};
+
+const ALERT_ACCENT = "#ff9f0a";
+
+// Open/Closed-style wording for binary sensors, plus whether the "on" state is
+// worth flagging (an open door is; detected motion is informational).
+function describeBinaryStatus(stateObj) {
+  const on = stateObj.state === "on";
+  const map = {
+    door: ["Open", "Closed", true],
+    garage_door: ["Open", "Closed", true],
+    window: ["Open", "Closed", true],
+    opening: ["Open", "Closed", true],
+    motion: ["Motion", "Clear", false],
+    occupancy: ["Occupied", "Empty", false],
+    presence: ["Home", "Away", false],
+    moisture: ["Wet", "Dry", true],
+    smoke: ["Smoke", "Clear", true],
+    gas: ["Gas", "Clear", true],
+    carbon_monoxide: ["CO", "Clear", true],
+    problem: ["Problem", "OK", true],
+    safety: ["Unsafe", "Safe", true],
+    tamper: ["Tamper", "Clear", true],
+    cold: ["Cold", "Normal", false],
+    heat: ["Hot", "Normal", false],
+    battery: ["Low", "Normal", true],
+    connectivity: ["Online", "Offline", false],
+  };
+  const entry = map[stateObj.attributes.device_class];
+  if (!entry) return { text: on ? "On" : "Off", alert: false };
+  return { text: on ? entry[0] : entry[1], alert: on && entry[2] };
+}
+
+class AppleHomeStatusCard extends LitElement {
+  static get properties() {
+    return {
+      hass: {},
+      _config: { state: true },
+    };
+  }
+
+  static getStubConfig(hass) {
+    const pick = (prefix, dc) =>
+      Object.keys(hass.states).find(
+        (e) =>
+          e.startsWith(prefix) &&
+          (!dc || hass.states[e].attributes.device_class === dc)
+      );
+    const items = [
+      pick("sensor.", "temperature"),
+      pick("sensor.", "humidity"),
+      pick("binary_sensor.", "door") || pick("binary_sensor.", "window"),
+    ].filter(Boolean);
+    return { title: "Status", items };
+  }
+
+  setConfig(config) {
+    const raw = config.items || config.entities || [];
+    if (!Array.isArray(raw) || raw.length === 0)
+      throw new Error("You must define items: a list of entities");
+    const items = raw
+      .map((it) => (typeof it === "string" ? { entity: it } : { ...it }))
+      .filter((it) => it.entity);
+    if (items.length === 0)
+      throw new Error("Each item needs an entity");
+    this._config = { ...config, items };
+  }
+
+  shouldUpdate(changed) {
+    return onlyIfEntitiesChanged(this, changed, this._entityIds(), []);
+  }
+
+  getCardSize() {
+    const cols = Number(this._config.columns) || 3;
+    return Math.max(1, Math.ceil(this._config.items.length / cols));
+  }
+
+  getGridOptions() {
+    return gridFor(this._config && this._config.size, { columns: 6, rows: 2 });
+  }
+
+  _entityIds() {
+    return this._config ? this._config.items.map((it) => it.entity) : [];
+  }
+
+  _moreInfo(entityId) {
+    const e = new Event("hass-more-info", { bubbles: true, composed: true });
+    e.detail = { entityId };
+    (document.querySelector("home-assistant") || this).dispatchEvent(e);
+  }
+
+  // Resolve one item to its displayable parts.
+  _resolve(item) {
+    const s = this.hass.states[item.entity];
+    const name = item.name || (s ? getEntityDisplayName(s, item.entity) : item.entity);
+    if (!s) {
+      return { missing: true, name, value: "—", unit: "", numeric: false };
+    }
+    const domain = domainOf(item.entity);
+    const dc = s.attributes.device_class;
+    let value = "";
+    let unit = "";
+    let numeric = false;
+    let active = false;
+    let alert = false;
+    let accent;
+
+    if (domain === "binary_sensor") {
+      const r = describeBinaryStatus(s);
+      value = r.text;
+      active = s.state === "on";
+      alert = r.alert;
+      accent = alert ? ALERT_ACCENT : DOMAIN_ACCENT.binary_sensor;
+    } else if (domain === "lock") {
+      value = s.state === "locked" ? "Locked" : "Unlocked";
+      active = s.state === "unlocked";
+      alert = active;
+      accent = alert ? ALERT_ACCENT : DOMAIN_ACCENT.lock;
+    } else if (domain === "cover") {
+      value = capitalizeText(s.state);
+      active = ["open", "opening"].includes(s.state);
+      accent = DOMAIN_ACCENT.cover;
+    } else if (s.attributes.unit_of_measurement && !["unknown", "unavailable"].includes(s.state)) {
+      const n = Number(s.state);
+      if (!Number.isNaN(n)) {
+        value = n.toLocaleString();
+        unit = s.attributes.unit_of_measurement;
+        numeric = true;
+      } else {
+        value = capitalizeText(s.state);
+      }
+      accent = SENSOR_DC_ACCENT[dc] || DOMAIN_ACCENT[domain] || DOMAIN_ACCENT._default;
+    } else {
+      active = isEntityOn(s);
+      value = describeEntityState(s, active);
+      accent = SENSOR_DC_ACCENT[dc] || DOMAIN_ACCENT[domain] || DOMAIN_ACCENT._default;
+    }
+
+    return {
+      stateObj: s,
+      name,
+      value,
+      unit,
+      numeric,
+      active,
+      alert,
+      accent: item.color || accent,
+      icon: item.icon || undefined,
+    };
+  }
+
+  render() {
+    if (!this._config || !this.hass) return html``;
+    const cols = Number(this._config.columns);
+    const gridStyle = cols
+      ? `--cols: repeat(${cols}, minmax(0, 1fr))`
+      : `--cols: repeat(auto-fit, minmax(78px, 1fr))`;
+    return html`
+      <ha-card>
+        <div class="panel">
+          ${this._config.title
+            ? html`<div class="title">${this._config.title}</div>`
+            : ""}
+          <div class="grid" style=${gridStyle}>
+            ${this._config.items.map((item) => {
+              const r = this._resolve(item);
+              return html`
+                <button
+                  class="cell ${r.active ? "on" : ""} ${r.alert ? "alert" : ""} ${r.missing ? "missing" : ""}"
+                  style="--accent:${r.accent || DOMAIN_ACCENT._default}"
+                  @click=${() => this._moreInfo(item.entity)}
+                  title=${r.name}
+                >
+                  <span class="cell-icon">
+                    ${r.stateObj
+                      ? html`<ha-state-icon
+                          .hass=${this.hass}
+                          .stateObj=${r.stateObj}
+                          .icon=${r.icon}
+                        ></ha-state-icon>`
+                      : html`<ha-icon icon="mdi:help"></ha-icon>`}
+                  </span>
+                  <span class="cell-val ${r.numeric ? "numeric" : ""}">
+                    ${r.value}${r.unit
+                      ? html`<span class="unit">${r.unit}</span>`
+                      : ""}
+                  </span>
+                  <span class="cell-label">${r.name}</span>
+                </button>
+              `;
+            })}
+          </div>
+        </div>
+      </ha-card>
+    `;
+  }
+
+  static get styles() {
+    return css`
+      :host {
+        display: block;
+        height: 100%;
+        container-type: inline-size;
+        container-name: ahastatus;
+      }
+      ha-card {
+        background: transparent;
+        border: none;
+        box-shadow: none;
+        height: 100%;
+      }
+      .panel {
+        height: 100%;
+        box-sizing: border-box;
+        padding: 16px;
+        border-radius: 26px;
+        background: rgba(120, 120, 128, 0.16);
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 8px 24px rgba(0, 0, 0, 0.1);
+      }
+      .title {
+        font-family: ${FONT_STACK_CSS};
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--secondary-text-color);
+        margin: 2px 2px 12px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: var(--cols);
+        gap: 10px;
+      }
+      .cell {
+        border: none;
+        text-align: left;
+        cursor: pointer;
+        font-family: ${FONT_STACK_CSS};
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px 12px 13px;
+        border-radius: 16px;
+        background: rgba(120, 120, 128, 0.16);
+        color: var(--primary-text-color);
+        transition: transform 0.2s ease, background 0.3s ease;
+        min-width: 0;
+      }
+      .cell:active {
+        transform: scale(0.96);
+      }
+      .cell.on {
+        background: linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.16),
+            rgba(255, 255, 255, 0.03)
+          ),
+          color-mix(in srgb, var(--accent) 30%, rgba(120, 120, 128, 0.14));
+      }
+      .cell.alert {
+        background: linear-gradient(
+            180deg,
+            rgba(255, 255, 255, 0.2),
+            rgba(255, 255, 255, 0.05)
+          ),
+          color-mix(in srgb, var(--accent) 46%, rgba(120, 120, 128, 0.12));
+        box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 70%, transparent);
+      }
+      .cell-icon {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        flex: none;
+        background: rgba(255, 255, 255, 0.7);
+        color: #111;
+        --mdc-icon-size: 18px;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+      }
+      .cell.on .cell-icon,
+      .cell.alert .cell-icon {
+        background: rgba(255, 255, 255, 0.95);
+      }
+      .cell-val {
+        font-size: 17px;
+        font-weight: 650;
+        line-height: 1.05;
+        letter-spacing: -0.02em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .cell-val.numeric {
+        font-size: 24px;
+        font-weight: 600;
+      }
+      .unit {
+        font-size: 13px;
+        font-weight: 600;
+        margin-left: 2px;
+        color: var(--secondary-text-color);
+      }
+      .cell.on .unit,
+      .cell.alert .unit {
+        color: rgba(0, 0, 0, 0.55);
+      }
+      .cell-label {
+        font-size: 12px;
+        font-weight: 550;
+        color: var(--secondary-text-color);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .cell.on .cell-val,
+      .cell.on .cell-label,
+      .cell.alert .cell-val,
+      .cell.alert .cell-label {
+        color: #111;
+      }
+      .cell.missing .cell-val {
+        color: var(--secondary-text-color);
+      }
+      @container ahastatus (max-width: 320px) {
+        .cell-val { font-size: 16px; }
+        .cell-val.numeric { font-size: 20px; }
+        .cell-label { font-size: 11px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .cell { transition-duration: 0.01ms !important; }
+      }
+    `;
+  }
+}
+
+customElements.define("apple-home-status-card", AppleHomeStatusCard);
 
 class AppleHomePager extends LitElement {
   static get properties() {
@@ -5469,9 +6438,25 @@ window.customCards.push(
     documentationURL: DOCS_URL,
   },
   {
+    type: "apple-home-cover-card",
+    name: "Apple Home Cover",
+    description:
+      "Blind, shade, curtain or garage tile — drag to set position, with slat and rolling-door visuals.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
     type: "apple-home-chip",
     name: "Apple Home Chip",
     description: "Compact standalone status chips for battery, mode, presence, and sensor state.",
+    preview: true,
+    documentationURL: DOCS_URL,
+  },
+  {
+    type: "apple-home-status-card",
+    name: "Apple Home Status",
+    description:
+      "A glanceable panel of room readouts — temperature, humidity, door and window states, motion, and leaks.",
     preview: true,
     documentationURL: DOCS_URL,
   },
