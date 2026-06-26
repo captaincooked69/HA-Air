@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.9.3";
+const VERSION = "0.9.4";
 
 /* eslint-disable no-console */
 console.info(
@@ -471,6 +471,15 @@ class AppleHomeCard extends LitElement {
     if (this._optimistic != null && realOn === this._optimistic) {
       this._optimistic = null; // HA caught up with the optimistic guess
     }
+    // Release the held drag value once HA reports the new level.
+    if (this._dragHeld && this._drag != null) {
+      const lvl = this._isLevelDomain() ? this._level(s) : null;
+      if (lvl != null && Math.abs(lvl - this._drag) <= 5) {
+        this._dragHeld = false;
+        this._drag = null;
+        window.clearTimeout(this._dragHoldTimer);
+      }
+    }
     if (this._prevOn !== undefined && realOn !== this._prevOn) {
       this._pop = realOn ? "on" : "off";
       window.clearTimeout(this._popTimer);
@@ -702,7 +711,11 @@ class AppleHomeCard extends LitElement {
     this._dragging = false;
     this._downY = e.clientY;
     this._tileEl = e.currentTarget;
-    this._levelAtDown = this._isLevelDomain() ? this._level(this._stateObj) : null;
+    this._levelAtDown = this._isLevelDomain()
+      ? (this._dragHeld && this._drag != null ? this._drag : this._level(this._stateObj))
+      : null;
+    window.clearTimeout(this._dragHoldTimer);
+    this._dragHeld = false;
     try { this._tileEl.setPointerCapture(e.pointerId); } catch (x) {}
     this._holdTimer = window.setTimeout(() => {
       if (this._dragging) return;
@@ -716,7 +729,15 @@ class AppleHomeCard extends LitElement {
     if (!this._pressed || this._levelAtDown == null) return;
     const dy = this._downY - e.clientY;
     if (!this._dragging && Math.abs(dy) < 6) return;
-    this._dragging = true;
+    if (!this._dragging) {
+      // A real drag has started. If the long-press already fired (and opened
+      // the controls sheet), undo it so releasing commits the level instead.
+      this._dragging = true;
+      if (this._holdFired) {
+        this._holdFired = false;
+        if (this._sheet) this._sheet.close();
+      }
+    }
     window.clearTimeout(this._holdTimer);
     const rect = this._tileEl.getBoundingClientRect();
     const pct = this._levelAtDown + (dy / rect.height) * 100;
@@ -727,14 +748,24 @@ class AppleHomeCard extends LitElement {
     this._pressed = false;
     window.clearTimeout(this._holdTimer);
     try { this._tileEl && this._tileEl.releasePointerCapture(e.pointerId); } catch (x) {}
-    if (this._holdFired) { this._dragging = false; return; }
+    // A drag always wins: commit the level even if a long-press fired first.
     if (this._dragging) {
       this._dragging = false;
-      if (this._drag != null) this._applyLevel(this._drag);
+      if (this._drag != null) {
+        this._applyLevel(this._drag);
+        // Keep the dragged value on-screen until HA reports the new level, so
+        // the tile doesn't snap back to the old brightness for a moment.
+        this._dragHeld = true;
+        window.clearTimeout(this._dragHoldTimer);
+        this._dragHoldTimer = window.setTimeout(() => {
+          this._dragHeld = false;
+          this._drag = null;
+        }, 2000);
+      }
       this._haptic("light");
-      this._drag = null;
       return;
     }
+    if (this._holdFired) { return; }
     // Double-tap detection.
     const now = Date.now();
     if (this._lastTap && now - this._lastTap < 250) {
@@ -754,6 +785,8 @@ class AppleHomeCard extends LitElement {
     this._pressed = false;
     this._dragging = false;
     this._drag = null;
+    this._dragHeld = false;
+    window.clearTimeout(this._dragHoldTimer);
     window.clearTimeout(this._holdTimer);
   }
 
@@ -1053,9 +1086,11 @@ class AppleHomeCard extends LitElement {
         line-height: 1.2;
         letter-spacing: -0.01em;
         color: var(--aha-text);
-        white-space: nowrap;
+        overflow-wrap: anywhere;
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
         overflow: hidden;
-        text-overflow: ellipsis;
       }
 
       .state {
@@ -3171,37 +3206,75 @@ class AppleHomeGraphCard extends LitElement {
     }
   }
 
+  // Bucket noisy recorder data into evenly-spaced averaged points. Even spacing
+  // is what makes the spline symmetric and stops the kinks from clustered
+  // samples; averaging tames sensor jitter.
+  _resample(pts, target) {
+    if (!pts || pts.length <= target) return pts || [];
+    const minX = pts[0].t;
+    const span = pts[pts.length - 1].t - minX || 1;
+    const sumT = new Array(target).fill(0);
+    const sumV = new Array(target).fill(0);
+    const cnt = new Array(target).fill(0);
+    for (const p of pts) {
+      let i = Math.floor(((p.t - minX) / span) * target);
+      if (i >= target) i = target - 1;
+      if (i < 0) i = 0;
+      sumT[i] += p.t;
+      sumV[i] += p.v;
+      cnt[i] += 1;
+    }
+    const out = [];
+    for (let i = 0; i < target; i += 1) {
+      if (cnt[i]) out.push({ t: sumT[i] / cnt[i], v: sumV[i] / cnt[i] });
+    }
+    return out;
+  }
+
   _path(pts, w, h, pad) {
-    const xs = pts.map((p) => p.t);
-    const vs = pts.map((p) => p.v);
-    const minX = Math.min(...xs);
-    const maxX = Math.max(...xs);
+    const data = this._resample(pts, 40);
+    const n = data.length;
+    const vs = data.map((p) => p.v);
     const minV = Math.min(...vs);
     const maxV = Math.max(...vs);
-    const spanX = maxX - minX || 1;
     const spanV = maxV - minV || 1;
-    const X = (t) => ((t - minX) / spanX) * w;
+    const X = (i) => (n === 1 ? w / 2 : (i / (n - 1)) * w);
     const Y = (v) => pad + (1 - (v - minV) / spanV) * (h - pad * 2);
-    const coords = pts.map((p) => ({ x: X(p.t), y: Y(p.v) }));
-    let line = `M${coords[0].x.toFixed(1)} ${coords[0].y.toFixed(1)}`;
-    if (coords.length === 2) {
-      line += ` L${coords[1].x.toFixed(1)} ${coords[1].y.toFixed(1)}`;
-    } else {
-      for (let i = 0; i < coords.length - 1; i += 1) {
-        const p0 = coords[Math.max(0, i - 1)];
-        const p1 = coords[i];
-        const p2 = coords[i + 1];
-        const p3 = coords[Math.min(coords.length - 1, i + 2)];
-        const cp1x = p1.x + (p2.x - p0.x) / 6;
-        const cp1y = p1.y + (p2.y - p0.y) / 6;
-        const cp2x = p2.x - (p3.x - p1.x) / 6;
-        const cp2y = p2.y - (p3.y - p1.y) / 6;
-        line += ` C${cp1x.toFixed(1)} ${cp1y.toFixed(1)} ${cp2x.toFixed(1)} ${cp2y.toFixed(1)} ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
+    const px = data.map((_, i) => X(i));
+    const py = data.map((p) => Y(p.v));
+
+    let line = `M${px[0].toFixed(1)} ${py[0].toFixed(1)}`;
+    if (n === 2) {
+      line += ` L${px[1].toFixed(1)} ${py[1].toFixed(1)}`;
+    } else if (n > 2) {
+      // Monotone cubic (Fritsch–Carlson): smooth but never overshoots, so the
+      // curve stays inside the data and reads cleanly.
+      const dx = px[1] - px[0]; // uniform after resampling
+      const slope = [];
+      for (let i = 0; i < n - 1; i += 1) slope[i] = (py[i + 1] - py[i]) / dx;
+      const m = new Array(n);
+      m[0] = slope[0];
+      m[n - 1] = slope[n - 2];
+      for (let i = 1; i < n - 1; i += 1) {
+        if (slope[i - 1] * slope[i] <= 0) {
+          m[i] = 0;
+        } else {
+          m[i] = (slope[i - 1] + slope[i]) / 2;
+          const lim = 3 * Math.min(Math.abs(slope[i - 1]), Math.abs(slope[i]));
+          if (Math.abs(m[i]) > lim) m[i] = (m[i] < 0 ? -lim : lim);
+        }
+      }
+      for (let i = 0; i < n - 1; i += 1) {
+        const c1x = px[i] + dx / 3;
+        const c1y = py[i] + (m[i] * dx) / 3;
+        const c2x = px[i + 1] - dx / 3;
+        const c2y = py[i + 1] - (m[i + 1] * dx) / 3;
+        line += ` C${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${px[i + 1].toFixed(1)} ${py[i + 1].toFixed(1)}`;
       }
     }
-    const first = coords[0];
-    const last = coords[coords.length - 1];
-    const area = `${line} L${last.x.toFixed(1)} ${h} L${first.x.toFixed(1)} ${h} Z`;
+    const first = px[0];
+    const last = px[n - 1];
+    const area = `${line} L${last.toFixed(1)} ${h} L${first.toFixed(1)} ${h} Z`;
     return { line, area, minV, maxV };
   }
 
@@ -3526,6 +3599,41 @@ class AppleHomeVacuumSheet extends LitElement {
     this._emitVacuumAction({ status: "returning" });
   }
 
+  _supports(flag) {
+    const s = this._stateObj;
+    return !!s && (Number(s.attributes.supported_features || 0) & flag) === flag;
+  }
+
+  _fanSpeedList() {
+    const s = this._stateObj;
+    const list = s && s.attributes.fan_speed_list;
+    return Array.isArray(list) ? list : [];
+  }
+
+  _currentFanSpeed() {
+    const s = this._stateObj;
+    return s ? s.attributes.fan_speed : undefined;
+  }
+
+  _setFanSpeed(speed) {
+    this.hass.callService("vacuum", "set_fan_speed", {
+      entity_id: this.entityId,
+      fan_speed: speed,
+    });
+  }
+
+  _fanIcon(speed) {
+    const k = String(speed).toLowerCase();
+    if (/(quiet|gentle|eco|min|soft|low|silent)/.test(k)) return "mdi:volume-low";
+    if (/(turbo|max|strong|high|boost|full)/.test(k)) return "mdi:fan-chevron-up";
+    if (/(mop|water|wet|scrub)/.test(k)) return "mdi:water";
+    return "mdi:fan";
+  }
+
+  _locate() {
+    this._service("locate");
+  }
+
   _renderStatusPill(label, value, accent) {
     return html`<span class="pill ${accent ? "accent" : ""}"><span>${label}</span><strong>${value}</strong></span>`;
   }
@@ -3581,7 +3689,7 @@ class AppleHomeVacuumSheet extends LitElement {
           </div>
 
           <div class="section-title">Controls</div>
-          <div class="grid-btns primary-grid">
+          <div class="grid-btns primary-grid ${this._supports(512) ? "three" : ""}">
             <button @click=${() => this._runPrimaryAction()}>
               <ha-icon icon=${primary.icon}></ha-icon>
               <span>${primaryLabel}</span>
@@ -3590,6 +3698,14 @@ class AppleHomeVacuumSheet extends LitElement {
               <ha-icon icon="mdi:home-import-outline"></ha-icon>
               <span>Dock</span>
             </button>
+            ${this._supports(512)
+              ? html`
+                  <button @click=${() => this._locate()}>
+                    <ha-icon icon="mdi:map-marker-radius"></ha-icon>
+                    <span>Locate</span>
+                  </button>
+                `
+              : ""}
           </div>
 
           ${quickActions.length
@@ -3616,6 +3732,27 @@ class AppleHomeVacuumSheet extends LitElement {
                       </button>
                     `
                   )}
+                </div>
+              `
+            : ""}
+
+          ${this._fanSpeedList().length
+            ? html`
+                <div class="section-title">Cleaning Mode</div>
+                <div class="action-grid">
+                  ${this._fanSpeedList().map((speed) => {
+                    const selected = this._currentFanSpeed() === speed;
+                    return html`
+                      <button
+                        class="room-action ${selected ? "selected" : ""}"
+                        aria-pressed=${selected ? "true" : "false"}
+                        @click=${() => this._setFanSpeed(speed)}
+                      >
+                        <ha-icon icon=${this._fanIcon(speed)}></ha-icon>
+                        <span>${capitalizeText(speed)}</span>
+                      </button>
+                    `;
+                  })}
                 </div>
               `
             : ""}
@@ -3810,6 +3947,9 @@ class AppleHomeVacuumSheet extends LitElement {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
+      }
+      .grid-btns.three {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
       .grid-btns button,
       .room-action,
