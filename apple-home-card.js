@@ -17,7 +17,7 @@ const LitElement =
 const html = LitElement.prototype.html;
 const css = LitElement.prototype.css;
 
-const VERSION = "0.9.4";
+const VERSION = "0.9.5";
 
 /* eslint-disable no-console */
 console.info(
@@ -3447,8 +3447,11 @@ class AppleHomeVacuumSheet extends LitElement {
       batteryEntity: {},
       statusEntity: {},
       actions: {},
+      autoRooms: {},
       _open: { state: true },
       _selectedActionKey: { state: true },
+      _rooms: { state: true },
+      _selectedRoomIds: { state: true },
     };
   }
 
@@ -3466,6 +3469,80 @@ class AppleHomeVacuumSheet extends LitElement {
 
   show() {
     this._open = true;
+    this._maybeFetchRooms();
+  }
+
+  // Roborock (and compatible) integrations don't expose rooms as entity
+  // attributes — they're behind the `roborock.get_maps` action, which returns
+  // a per-map { segmentId: roomName } mapping. If that action exists we pull
+  // the real rooms off the device so "Where to Clean" is populated without any
+  // manual YAML. Other vacuums simply fall back to configured actions.
+  async _maybeFetchRooms() {
+    if (this.autoRooms === false || this._roomsFetched || !this.hass) return;
+    const svc = this.hass.services && this.hass.services.roborock;
+    if (!svc || !svc.get_maps) return;
+    this._roomsFetched = true;
+    try {
+      const res = await this.hass.callService(
+        "roborock",
+        "get_maps",
+        {},
+        { entity_id: this.entityId },
+        false,
+        true
+      );
+      const payload = res && res.response;
+      // Entity-targeted actions key the response by entity_id; tolerate either.
+      const entry = payload && (payload[this.entityId] || payload);
+      const maps = entry && entry.maps;
+      if (!Array.isArray(maps)) return;
+      const seen = new Set();
+      const rooms = [];
+      for (const map of maps) {
+        const dict = map && map.rooms;
+        if (!dict) continue;
+        for (const [id, name] of Object.entries(dict)) {
+          const segId = Number(id);
+          if (Number.isNaN(segId) || seen.has(segId)) continue;
+          seen.add(segId);
+          rooms.push({ id: segId, name: String(name) });
+        }
+      }
+      if (rooms.length) this._rooms = rooms;
+    } catch (e) {
+      /* No map yet, cloud hiccup, or unsupported model — stay with actions. */
+    }
+  }
+
+  _autoRooms() {
+    return Array.isArray(this._rooms) ? this._rooms : [];
+  }
+
+  _roomSelected(id) {
+    return Array.isArray(this._selectedRoomIds) && this._selectedRoomIds.includes(id);
+  }
+
+  // Multi-select: tapping rooms builds up a set to clean together. Picking any
+  // room clears a manual/whole-house selection; clearing the last room falls
+  // back to Whole House.
+  _toggleRoom(id) {
+    const current = Array.isArray(this._selectedRoomIds) ? this._selectedRoomIds : [];
+    const next = current.includes(id)
+      ? current.filter((x) => x !== id)
+      : [...current, id];
+    this._selectedRoomIds = next;
+    this._selectedActionKey = next.length ? "__rooms__" : this._wholeHouseKey();
+  }
+
+  _selectedRoomLabel() {
+    const ids = this._selectedRoomIds || [];
+    const names = ids
+      .map((id) => {
+        const room = this._autoRooms().find((r) => r.id === id);
+        return room ? room.name : null;
+      })
+      .filter(Boolean);
+    return names.join(", ");
   }
 
   close() {
@@ -3559,6 +3636,7 @@ class AppleHomeVacuumSheet extends LitElement {
 
   _selectAction(key) {
     this._selectedActionKey = key;
+    this._selectedRoomIds = [];
   }
 
   _emitVacuumAction(detail) {
@@ -3573,19 +3651,33 @@ class AppleHomeVacuumSheet extends LitElement {
 
   _runPrimaryAction() {
     const primary = this._primaryAction();
+    const s = this._stateObj;
+    const roomIds = Array.isArray(this._selectedRoomIds) ? this._selectedRoomIds : [];
     const selectedAction = this._selectedAction();
-    const roomLabel = selectedAction ? this._actionLabel(selectedAction) : "Whole House";
+
+    // A fresh start with rooms picked → segment clean. Resuming from a pause
+    // should continue the in-progress run, not re-issue a segment command.
+    if (primary.service === "start" && roomIds.length && s && s.state !== "paused") {
+      this.hass.callService("vacuum", "send_command", {
+        entity_id: this.entityId,
+        command: "app_segment_clean",
+        params: roomIds,
+      });
+      this._emitVacuumAction({ status: "cleaning", roomLabel: this._selectedRoomLabel() });
+      this.close();
+      return;
+    }
 
     if (primary.service === "start" && selectedAction) {
       callConfiguredAction(this.hass, selectedAction);
-      this._emitVacuumAction({ status: "cleaning", roomLabel });
+      this._emitVacuumAction({ status: "cleaning", roomLabel: this._actionLabel(selectedAction) });
       this.close();
       return;
     }
 
     this._service(primary.service);
     if (primary.service === "start") {
-      this._emitVacuumAction({ status: "cleaning", roomLabel });
+      this._emitVacuumAction({ status: "cleaning", roomLabel: "Whole House" });
       this.close();
       return;
     }
@@ -3647,11 +3739,23 @@ class AppleHomeVacuumSheet extends LitElement {
     const returning = s && s.state === "returning";
     const name = this.heading || getEntityDisplayName(s, this.entityId);
     const quickActions = this._actionConfigs();
+    const autoRooms = this._autoRooms();
     const selectedKey = this._selectedActionKey || this._wholeHouseKey();
     const selectedAction = this._selectedAction();
+    const roomIds = this._selectedRoomIds || [];
+    const roomLabel =
+      roomIds.length === 1
+        ? this._selectedRoomLabel()
+        : roomIds.length > 1
+          ? `${roomIds.length} Rooms`
+          : "";
     const primaryLabel =
-      primary.service === "start" && selectedAction
-        ? `${primary.label} ${this._actionLabel(selectedAction)}`
+      primary.service === "start"
+        ? roomLabel
+          ? `${primary.label} ${roomLabel}`
+          : selectedAction
+            ? `${primary.label} ${this._actionLabel(selectedAction)}`
+            : primary.label
         : primary.label;
     const subtitle = cleaning
       ? "Cleaning is in progress."
@@ -3708,7 +3812,7 @@ class AppleHomeVacuumSheet extends LitElement {
               : ""}
           </div>
 
-          ${quickActions.length
+          ${quickActions.length || autoRooms.length
             ? html`
                 <div class="section-title">Where to Clean</div>
                 <div class="action-grid">
@@ -3720,6 +3824,18 @@ class AppleHomeVacuumSheet extends LitElement {
                     <ha-icon icon="mdi:home-floor-0"></ha-icon>
                     <span>Whole House</span>
                   </button>
+                  ${autoRooms.map(
+                    (room) => html`
+                      <button
+                        class="room-action ${this._roomSelected(room.id) ? "selected" : ""}"
+                        aria-pressed=${this._roomSelected(room.id) ? "true" : "false"}
+                        @click=${() => this._toggleRoom(room.id)}
+                      >
+                        <ha-icon icon="mdi:floor-plan"></ha-icon>
+                        <span>${room.name}</span>
+                      </button>
+                    `
+                  )}
                   ${quickActions.map(
                     (action, index) => html`
                       <button
@@ -4195,6 +4311,7 @@ class AppleHomeVacuumCard extends LitElement {
     sheet.batteryEntity = this._config.battery_entity;
     sheet.statusEntity = this._config.status_entity;
     sheet.actions = this._actionConfigs();
+    sheet.autoRooms = this._config.auto_rooms !== false;
     sheet.addEventListener("vacuum-action", (event) => {
       this._setPendingAction(event.detail);
     });

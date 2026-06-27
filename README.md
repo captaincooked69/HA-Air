@@ -97,13 +97,23 @@ entity: vacuum.rocky
 name: Rocky
 battery_entity: sensor.rocky_battery
 status_entity: sensor.rocky_status
+# auto_rooms: false   # opt out of auto-detected rooms (default: on)
 actions:
   - entity: button.living_room_rocky_full_cleaning
     label: Living Room
     icon: mdi:sofa-outline
 ```
 
-Tap opens a dedicated vacuum sheet with start/pause, dock, locate, and optional quick room buttons driven by button, script, or service actions.
+Tap opens a dedicated vacuum sheet with start/pause, dock, locate, cleaning-mode
+(fan speed) selection, and room selection.
+
+**Rooms are auto-detected** for Roborock vacuums: if the `roborock.get_maps`
+action is available, the sheet reads the device's real room/segment names and
+lets you tap one or more rooms before pressing Start (it issues
+`vacuum.send_command` → `app_segment_clean` with the selected segment IDs). Set
+`auto_rooms: false` to disable. The optional `actions:` list still works for any
+vacuum and is shown alongside auto-detected rooms — use it for scripts, scenes,
+or other integrations.
 
 ### Fan tile
 
