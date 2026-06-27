@@ -1,542 +1,916 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Jack's Home — Apple Home–style dashboard (v1, built from your entity registry)
+﻿# =============================================================================
+# Jack's Home - "Pretty" dashboard (Air HA Dashboard / apple-home-card)
 #
-# HOW TO USE
-#   Dashboard ▸ Edit ▸ ⋮ ▸ Raw configuration editor ▸ paste this whole file.
-#   (Back up your current raw config first.)
+# This is the live export of the /dashboard-pretty dashboard. To use:
+#   Settings > Dashboards > Pretty > Edit > (3 dots) > Raw configuration editor
+#   then paste this whole file.
 #
-# WHAT'S INCLUDED
-#   Curated, room-grouped tiles for the things you actually touch. Plumbing is
-#   intentionally left out — browser_mod_* sensors, *_debug_*, per-speaker
-#   bass/treble/crossfade config switches, update.*, individual *_browser_width
-#   sensors, BLE distance trackers, etc. Add any back if you want them.
-#
-# ASSUMPTIONS (your areas are unset, so rooms are inferred from names — fix freely)
-#   • media_player.living_room   → Apple TV (has remote + keyboard_focus)
-#   • media_player.living_room_tv → Sony Bravia
-#   • Sonos: arc / kitchen / patio / patio_2 are the real speakers; the _2/_3
-#     duplicates (AirSonos / Music Assistant mirrors) are omitted.
-#   • alarm_control_panel.* are eufy HomeBase guard modes → grouped under Security.
-#   • AC is script-driven (no climate entity) → "Climate" section of scripts.
-# ─────────────────────────────────────────────────────────────────────────────
-
-title: Home
+# Views: Home, Rooms, Cameras, House, Vacuum.
+#   - No swipe/pager view (removed - use the view tabs instead).
+#   - The Vacuum view mirrors the kiosk's full Roborock control (map picker,
+#     room toggles, segment cleaning, suction levels, mop/maintenance/status).
+#     It needs custom:button-card + custom:mushroom-vacuum-card installed, plus
+#     the rocky_* / vacuum_room_* helper entities.
+# =============================================================================
+title: Pretty
 views:
-  # ===========================================================================
-  # HOME — overview: favourites, scenes, security, status
-  # ===========================================================================
-  - title: Home
-    path: home
-    type: sections
-    max_columns: 4
-    sections:
-      # The background card paints the whole-dashboard backdrop (any view) and
-      # shows the preset picker. Keep it once, anywhere — here at the top of Home.
-      - type: grid
-        cards:
-          - type: custom:apple-home-background
-            background: aurora
-            selector: true
+- title: Home
+  path: home
+  icon: mdi:home
+  type: sections
+  max_columns: 4
+  sections:
+  - type: grid
+    cards:
+    - type: custom:apple-home-background
+      background: aurora
+      selector: true
+  - type: grid
+    cards:
+    - type: heading
+      heading: Scenes
+      heading_style: title
+      icon: mdi:movie-open
+    - type: custom:apple-home-card
+      entity: scene.bright
+      icon: mdi:white-balance-sunny
+    - type: custom:apple-home-card
+      entity: scene.cosy
+      icon: mdi:sofa
+      color: '#ff9f0a'
+    - type: custom:apple-home-card
+      entity: scene.movie_night
+      icon: mdi:movie
+      color: '#bf5af2'
+    - type: custom:apple-home-card
+      entity: scene.night_night
+      icon: mdi:weather-night
+      color: '#5e5ce6'
+    - type: custom:apple-home-card
+      entity: scene.sleep
+      icon: mdi:bed
+      color: '#5e5ce6'
+    - type: custom:apple-home-card
+      entity: script.goodnight
+      name: Goodnight
+      icon: mdi:moon-waning-crescent
+      color: '#5e5ce6'
+    - type: custom:apple-home-card
+      entity: script.walking_the_dogs
+      name: Walk the Dogs
+      icon: mdi:dog-side
+      color: '#30d158'
+  - type: grid
+    cards:
+    - type: heading
+      heading: Security
+      heading_style: title
+      icon: mdi:shield-home
+    - type: custom:apple-home-card
+      entity: alarm_control_panel.home_base
+      name: Home Base
+      icon: mdi:shield
+    - type: custom:apple-home-card
+      entity: alarm_control_panel.living_room
+      name: Living Room
+      icon: mdi:cctv
+    - type: custom:apple-home-card
+      entity: alarm_control_panel.backyard
+      name: Backyard
+      icon: mdi:cctv
+    - type: custom:apple-home-card
+      entity: binary_sensor.doorbell_ringing
+      name: Doorbell
+      icon: mdi:bell
+      color: '#0a84ff'
+    - type: custom:apple-home-card
+      entity: binary_sensor.doorbell_person_detected
+      name: At Door
+      icon: mdi:account
+    - type: custom:apple-home-card
+      entity: cover.garagedoor
+      name: Garage Door
+      icon: mdi:garage
+  - type: grid
+    cards:
+    - type: heading
+      heading: Rooms
+      heading_style: title
+      icon: mdi:floor-plan
+    - type: custom:apple-home-area-card
+      name: Living Room
+      icon: mdi:sofa
+      navigation_path: /dashboard-pretty/rooms
+      entities:
+      - light.living_room_1
+      - light.living_room_lamp
+      - light.canvas_281d
+    - type: custom:apple-home-area-card
+      name: Bedroom
+      icon: mdi:bed
+      navigation_path: /dashboard-pretty/rooms
+      entities:
+      - light.bedroom
+    - type: custom:apple-home-area-card
+      name: Hallway & Stairs
+      icon: mdi:stairs
+      navigation_path: /dashboard-pretty/rooms
+      entities:
+      - light.hallway
+      - light.stairs
+    - type: custom:apple-home-area-card
+      name: Garage
+      icon: mdi:garage
+      navigation_path: /dashboard-pretty/rooms
+      entities:
+      - light.garage
+    - type: custom:apple-home-area-card
+      name: Office
+      icon: mdi:printer-3d
+      navigation_path: /dashboard-pretty/rooms
+      entities:
+      - light.3d_printing_lights
+      - switch.prusa_core_one
+  - type: grid
+    cards:
+    - type: heading
+      heading: Status
+      heading_style: title
+      icon: mdi:home-analytics
+    - type: custom:apple-home-card
+      entity: person.jack
+      name: Jack
+      icon: mdi:account
+    - type: custom:apple-home-weather-card
+      entity: weather.forecast_home
+      name: Home
+      size: large
+    - type: custom:apple-home-graph-card
+      entity: sensor.raxe300_gateway_download_speed
+      name: Download
+    - type: custom:apple-home-card
+      entity: sensor.jacks_iphone_2_battery_level
+      name: iPhone
+      icon: mdi:cellphone
+      color: '#30d158'
+  - type: grid
+    cards:
+    - type: heading
+      heading: New section
+    - type: custom:apple-home-weather-card
+      entity: weather.forecast_home
+      forecast_days: 7
+      animated: true
+    - type: custom:apple-home-vacuum-card
+      entity: vacuum.rocky
+    - type: custom:apple-home-weather-card
+      entity: weather.forecast_home
+      forecast_days: 7
+      animated: true
+- title: Rooms
+  path: rooms
+  icon: mdi:floor-plan
+  type: sections
+  max_columns: 4
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Living Room
+      heading_style: title
+      icon: mdi:sofa
+    - type: custom:apple-home-card
+      entity: light.living_room_1
+      name: Ceiling
+    - type: custom:apple-home-card
+      entity: light.living_room_lamp
+      name: Lamp
+    - type: custom:apple-home-card
+      entity: light.canvas_281d
+      name: Nanoleaf
+      color: '#bf5af2'
+    - type: custom:apple-home-card
+      entity: switch.christmas_tree
+      name: Christmas Tree
+      icon: mdi:pine-tree
+      color: '#30d158'
+    - type: custom:apple-home-media-card
+      entity: media_player.arc
+      name: Sonos Arc
+    - type: custom:apple-home-card
+      entity: media_player.living_room_tv
+      name: TV
+      icon: mdi:television
+    - type: custom:apple-home-card
+      entity: media_player.living_room
+      name: Apple TV
+      icon: mdi:apple
+    - type: custom:apple-home-card
+      entity: binary_sensor.living_room_motion_detected
+      name: Motion
+      icon: mdi:motion-sensor
+  - type: grid
+    cards:
+    - type: heading
+      heading: Bedroom
+      heading_style: title
+      icon: mdi:bed
+    - type: custom:apple-home-card
+      entity: light.bedroom
+      name: Lights
+    - type: custom:apple-home-card
+      entity: scene.bedroom_bright
+      name: Bright
+      icon: mdi:white-balance-sunny
+    - type: custom:apple-home-card
+      entity: scene.bedroom_dim
+      name: Dim
+      icon: mdi:weather-night
+      color: '#5e5ce6'
+    - type: custom:apple-home-media-card
+      entity: media_player.bedroom_home_assistant_voice_0a95d7_media_player
+      name: Bedroom Speaker
+  - type: grid
+    cards:
+    - type: heading
+      heading: Kitchen
+      heading_style: title
+      icon: mdi:fridge
+    - type: custom:apple-home-media-card
+      entity: media_player.kitchen
+      name: Kitchen Sonos
+  - type: grid
+    cards:
+    - type: heading
+      heading: Bathroom & Dressing
+      heading_style: title
+      icon: mdi:shower
+    - type: custom:apple-home-card
+      entity: light.bathroom
+      name: Bathroom
+    - type: custom:apple-home-card
+      entity: light.dressing_room
+      name: Dressing Room
+  - type: grid
+    cards:
+    - type: heading
+      heading: Hallway & Stairs
+      heading_style: title
+      icon: mdi:stairs
+    - type: custom:apple-home-card
+      entity: light.hallway
+      name: Hallway
+    - type: custom:apple-home-card
+      entity: binary_sensor.hallway
+      name: Hall Motion
+      icon: mdi:motion-sensor
+    - type: custom:apple-home-card
+      entity: light.stairs
+      name: Stairs
+    - type: custom:apple-home-card
+      entity: binary_sensor.stairs
+      name: Stairs Motion
+      icon: mdi:motion-sensor
+    - type: custom:apple-home-card
+      entity: binary_sensor.sliding_door
+      name: Sliding Door
+      icon: mdi:door-sliding
+  - type: grid
+    cards:
+    - type: heading
+      heading: Garage
+      heading_style: title
+      icon: mdi:garage
+    - type: custom:apple-home-card
+      entity: light.garage
+      name: Light
+    - type: custom:apple-home-card
+      entity: cover.garagedoor
+      name: Door
+      icon: mdi:garage
+    - type: custom:apple-home-card
+      entity: binary_sensor.garage_door
+      name: Door State
+      icon: mdi:garage-alert
+  - type: grid
+    cards:
+    - type: heading
+      heading: Office & 3D Printing
+      heading_style: title
+      icon: mdi:printer-3d
+    - type: custom:apple-home-card
+      entity: light.3d_printing_lights
+      name: Lights
+    - type: custom:apple-home-card
+      entity: switch.prusa_core_one
+      name: Printer Power
+      icon: mdi:power
+    - type: custom:apple-home-card
+      entity: sensor.prusa_core_one
+      name: Printer
+      icon: mdi:printer-3d-nozzle
+    - type: custom:apple-home-card
+      entity: sensor.prusa_core_one_progress
+      name: Progress
+      icon: mdi:progress-helper
+      color: '#ff9f0a'
+    - type: custom:apple-home-card
+      entity: binary_sensor.office_door
+      name: Door
+      icon: mdi:door
+    - type: custom:apple-home-graph-card
+      entity: sensor.3d_printing_sensor_temperature
+      name: Temperature
+    - type: custom:apple-home-graph-card
+      entity: sensor.3d_printing_sensor_humidity
+      name: Humidity
+    - type: custom:apple-home-graph-card
+      entity: sensor.3d_printing_sensor_voc_index
+      name: Air VOC
+    - type: custom:apple-home-graph-card
+      entity: sensor.3d_printing_sensor_current_pm2_5
+      name: PM2.5
+  - type: grid
+    cards:
+    - type: heading
+      heading: Patio
+      heading_style: title
+      icon: mdi:flower
+    - type: custom:apple-home-media-card
+      entity: media_player.patio
+      name: Patio Sonos
+    - type: custom:apple-home-media-card
+      entity: media_player.patio_2
+      name: Patio Beam
+  - type: grid
+    cards:
+    - type: heading
+      heading: Backyard
+      heading_style: title
+      icon: mdi:tree
+    - type: custom:apple-home-card
+      entity: switch.backyard_light
+      name: Light
+    - type: custom:apple-home-card
+      entity: binary_sensor.backyard_motion_detected
+      name: Motion
+      icon: mdi:motion-sensor
+    - type: custom:apple-home-card
+      entity: binary_sensor.backyard_person_detected
+      name: Person
+      icon: mdi:account
+- title: Cameras
+  path: cameras
+  icon: mdi:cctv
+  type: sections
+  max_columns: 3
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Cameras
+      heading_style: title
+      icon: mdi:cctv
+    - type: picture-entity
+      entity: camera.doorbell
+      name: Doorbell
+      camera_view: auto
+    - type: picture-entity
+      entity: camera.living_room
+      name: Living Room
+      camera_view: auto
+    - type: picture-entity
+      entity: camera.backyard
+      name: Backyard
+      camera_view: auto
+    - type: picture-entity
+      entity: camera.prusa_core_one_preview
+      name: 3D Printer
+      camera_view: auto
+- title: House
+  path: house
+  icon: mdi:home-analytics
+  type: sections
+  max_columns: 4
+  sections:
+  - type: grid
+    cards:
+    - type: heading
+      heading: Rocky (Vacuum)
+      heading_style: title
+      icon: mdi:robot-vacuum
+    - type: custom:apple-home-card
+      entity: vacuum.rocky
+      name: Rocky
+      icon: mdi:robot-vacuum
+    - type: custom:apple-home-card
+      entity: button.living_room_rocky_full_cleaning
+      name: Full Clean
+      icon: mdi:broom
+      color: '#64d2ff'
+    - type: custom:apple-home-card
+      entity: sensor.rocky_battery
+      name: Battery
+      icon: mdi:battery
+      color: '#30d158'
+    - type: custom:apple-home-card
+      entity: sensor.rocky_status
+      name: Status
+      icon: mdi:information
+  - type: grid
+    cards:
+    - type: heading
+      heading: Network
+      heading_style: title
+      icon: mdi:wifi
+    - type: custom:apple-home-graph-card
+      entity: sensor.raxe300_gateway_download_speed
+      name: Download
+    - type: custom:apple-home-graph-card
+      entity: sensor.raxe300_gateway_upload_speed
+      name: Upload
+    - type: custom:apple-home-card
+      entity: binary_sensor.raxe300_gateway_wan_status
+      name: Internet
+      icon: mdi:web
+  - type: grid
+    cards:
+    - type: heading
+      heading: Sensors
+      heading_style: title
+      icon: mdi:chart-line
+    - type: custom:apple-home-graph-card
+      entity: sensor.timmerflotte_temp_hmd_sen_temperature
+      name: Temperature
+    - type: custom:apple-home-graph-card
+      entity: sensor.timmerflotte_temp_hmd_sen_humidity
+      name: Humidity
+    - type: custom:apple-home-graph-card
+      entity: sensor.timmerflotte_temp_hmd_sen_temperature_2
+      name: Temperature 2
+  - type: grid
+    cards:
+    - type: heading
+      heading: Lists
+      heading_style: title
+      icon: mdi:format-list-checks
+    - type: todo-list
+      entity: todo.shopping_list
+- title: Vacuum
+  path: vacuum
+  icon: mdi:robot-vacuum
+  cards:
+  - type: custom:mushroom-vacuum-card
+    entity: vacuum.rocky
+    icon_animation: true
+    show_state: true
+  - type: vertical-stack
+    cards:
+    - type: horizontal-stack
+      cards:
+      - type: custom:button-card
+        entity: select.rocky_selected_map
+        name: Upstairs
+        icon: mdi:home-floor-1
+        tap_action:
+          action: call-service
+          service: select.select_option
+          service_data:
+            entity_id: select.rocky_selected_map
+            option: Upstairs
+        styles:
+          card:
+          - border-radius: 10px
+          - background-color: "[[[return entity.state==='Upstairs'?'var(--primary-color)':'var(--card-background-color)']]]"
+          - border: "[[[return entity.state==='Upstairs'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+          name:
+          - color: "[[[return entity.state==='Upstairs'?'white':'var(--primary-text-color)']]]"
+          icon:
+          - color: "[[[return entity.state==='Upstairs'?'white':'var(--state-icon-color)']]]"
+      - type: custom:button-card
+        entity: select.rocky_selected_map
+        name: Downstairs
+        icon: mdi:home-floor-0
+        tap_action:
+          action: call-service
+          service: select.select_option
+          service_data:
+            entity_id: select.rocky_selected_map
+            option: Downstairs
+        styles:
+          card:
+          - border-radius: 10px
+          - background-color: "[[[return entity.state==='Downstairs'?'var(--primary-color)':'var(--card-background-color)']]]"
+          - border: "[[[return entity.state==='Downstairs'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+          name:
+          - color: "[[[return entity.state==='Downstairs'?'white':'var(--primary-text-color)']]]"
+          icon:
+          - color: "[[[return entity.state==='Downstairs'?'white':'var(--state-icon-color)']]]"
+    - type: conditional
+      conditions:
+      - entity: select.rocky_selected_map
+        state: Upstairs
+      card:
+        type: picture-entity
+        entity: image.rocky_upstairs
+        show_name: false
+        show_state: false
+    - type: conditional
+      conditions:
+      - entity: select.rocky_selected_map
+        state: Downstairs
+      card:
+        type: picture-entity
+        entity: image.rocky_downstairs
+        show_name: false
+        show_state: false
+  - type: custom:button-card
+    name: SELECT ROOMS
+    show_icon: false
+    tap_action:
+      action: none
+    styles:
+      card:
+      - background: none
+      - padding: 4px 0 0 0
+      - box-shadow: none
+      name:
+      - font-size: 12px
+      - font-weight: "600"
+      - letter-spacing: 1px
+      - color: var(--secondary-text-color)
+      - text-align: left
+      - padding: 0 8px
+  - type: grid
+    columns: 4
+    square: false
+    cards:
+    - type: custom:button-card
+      entity: input_boolean.vacuum_room_dining
+      name: Dining
+      icon: mdi:table-chair
+      tap_action:
+        action: toggle
+      styles:
+        card:
+        - border-radius: 12px
+        - padding: 12px 4px
+        - background-color: "[[[return entity.state==='on'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.state==='on'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - font-size: 12px
+        icon:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - width: 28px
+    - type: custom:button-card
+      entity: input_boolean.vacuum_room_kitchen
+      name: Kitchen
+      icon: mdi:stove
+      tap_action:
+        action: toggle
+      styles:
+        card:
+        - border-radius: 12px
+        - padding: 12px 4px
+        - background-color: "[[[return entity.state==='on'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.state==='on'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - font-size: 12px
+        icon:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - width: 28px
+    - type: custom:button-card
+      entity: input_boolean.vacuum_room_corridor
+      name: Corridor
+      icon: mdi:door-open
+      tap_action:
+        action: toggle
+      styles:
+        card:
+        - border-radius: 12px
+        - padding: 12px 4px
+        - background-color: "[[[return entity.state==='on'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.state==='on'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - font-size: 12px
+        icon:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - width: 28px
+    - type: custom:button-card
+      entity: input_boolean.vacuum_room_living
+      name: Living
+      icon: mdi:sofa
+      tap_action:
+        action: toggle
+      styles:
+        card:
+        - border-radius: 12px
+        - padding: 12px 4px
+        - background-color: "[[[return entity.state==='on'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.state==='on'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - font-size: 12px
+        icon:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - width: 28px
+    - type: custom:button-card
+      entity: input_boolean.vacuum_room_wardrobe
+      name: Wardrobe
+      icon: mdi:wardrobe-outline
+      tap_action:
+        action: toggle
+      styles:
+        card:
+        - border-radius: 12px
+        - padding: 12px 4px
+        - background-color: "[[[return entity.state==='on'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.state==='on'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - font-size: 12px
+        icon:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - width: 28px
+    - type: custom:button-card
+      entity: input_boolean.vacuum_room_master_bedroom
+      name: Bedroom
+      icon: mdi:bed-king-outline
+      tap_action:
+        action: toggle
+      styles:
+        card:
+        - border-radius: 12px
+        - padding: 12px 4px
+        - background-color: "[[[return entity.state==='on'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.state==='on'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - font-size: 12px
+        icon:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - width: 28px
+    - type: custom:button-card
+      entity: input_boolean.vacuum_room_bathroom
+      name: Bathroom
+      icon: mdi:shower
+      tap_action:
+        action: toggle
+      styles:
+        card:
+        - border-radius: 12px
+        - padding: 12px 4px
+        - background-color: "[[[return entity.state==='on'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.state==='on'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - font-size: 12px
+        icon:
+        - color: "[[[return entity.state==='on'?'white':'var(--primary-text-color)']]]"
+        - width: 28px
+  - type: horizontal-stack
+    cards:
+    - type: custom:button-card
+      name: Clean Selected
+      icon: mdi:play-circle
+      tap_action:
+        action: call-service
+        service: script.vacuum_clean_selected_rooms
+      styles:
+        card:
+        - background-color: '#43a047'
+        - border-radius: 12px
+        name:
+        - color: white
+        - font-weight: "600"
+        icon:
+        - color: white
+    - type: custom:button-card
+      name: Full House
+      icon: mdi:robot-vacuum
+      tap_action:
+        action: call-service
+        service: vacuum.send_command
+        service_data:
+          entity_id: vacuum.rocky
+          command: app_segment_clean
+          params:
+          - segments:
+            - 1
+            - 2
+            - 3
+            - 4
+            - 5
+            - 6
+            - 7
+            repeat: 1
+      styles:
+        card:
+        - background-color: '#1e88e5'
+        - border-radius: 12px
+        name:
+        - color: white
+        - font-weight: "600"
+        icon:
+        - color: white
+    - type: custom:button-card
+      name: Pause
+      icon: mdi:pause-circle
+      tap_action:
+        action: call-service
+        service: vacuum.pause
+        service_data:
+          entity_id: vacuum.rocky
+      styles:
+        card:
+        - border-radius: 12px
+    - type: custom:button-card
+      name: Dock
+      icon: mdi:home-import-outline
+      tap_action:
+        action: call-service
+        service: vacuum.return_to_base
+        service_data:
+          entity_id: vacuum.rocky
+      styles:
+        card:
+        - border-radius: 12px
+  - type: custom:button-card
+    name: SUCTION POWER
+    show_icon: false
+    tap_action:
+      action: none
+    styles:
+      card:
+      - background: none
+      - padding: 4px 0 0 0
+      - box-shadow: none
+      name:
+      - font-size: 12px
+      - font-weight: "600"
+      - letter-spacing: 1px
+      - color: var(--secondary-text-color)
+      - text-align: left
+      - padding: 0 8px
+  - type: horizontal-stack
+    cards:
+    - type: custom:button-card
+      entity: vacuum.rocky
+      name: Quiet
+      icon: mdi:fan-speed-1
+      tap_action:
+        action: call-service
+        service: vacuum.set_fan_speed
+        service_data:
+          entity_id: vacuum.rocky
+          fan_speed: quiet
+      styles:
+        card:
+        - border-radius: 10px
+        - padding: 10px 4px
+        - background-color: "[[[return entity.attributes.fan_speed==='quiet'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.attributes.fan_speed==='quiet'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.attributes.fan_speed==='quiet'?'white':'var(--primary-text-color)']]]"
+        - font-size: 11px
+        icon:
+        - color: "[[[return entity.attributes.fan_speed==='quiet'?'white':'var(--state-icon-color)']]]"
+        - width: 22px
+    - type: custom:button-card
+      entity: vacuum.rocky
+      name: Balanced
+      icon: mdi:fan-speed-2
+      tap_action:
+        action: call-service
+        service: vacuum.set_fan_speed
+        service_data:
+          entity_id: vacuum.rocky
+          fan_speed: balanced
+      styles:
+        card:
+        - border-radius: 10px
+        - padding: 10px 4px
+        - background-color: "[[[return entity.attributes.fan_speed==='balanced'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.attributes.fan_speed==='balanced'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.attributes.fan_speed==='balanced'?'white':'var(--primary-text-color)']]]"
+        - font-size: 11px
+        icon:
+        - color: "[[[return entity.attributes.fan_speed==='balanced'?'white':'var(--state-icon-color)']]]"
+        - width: 22px
+    - type: custom:button-card
+      entity: vacuum.rocky
+      name: Turbo
+      icon: mdi:fan-speed-3
+      tap_action:
+        action: call-service
+        service: vacuum.set_fan_speed
+        service_data:
+          entity_id: vacuum.rocky
+          fan_speed: turbo
+      styles:
+        card:
+        - border-radius: 10px
+        - padding: 10px 4px
+        - background-color: "[[[return entity.attributes.fan_speed==='turbo'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.attributes.fan_speed==='turbo'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.attributes.fan_speed==='turbo'?'white':'var(--primary-text-color)']]]"
+        - font-size: 11px
+        icon:
+        - color: "[[[return entity.attributes.fan_speed==='turbo'?'white':'var(--state-icon-color)']]]"
+        - width: 22px
+    - type: custom:button-card
+      entity: vacuum.rocky
+      name: Max
+      icon: mdi:fan
+      tap_action:
+        action: call-service
+        service: vacuum.set_fan_speed
+        service_data:
+          entity_id: vacuum.rocky
+          fan_speed: max
+      styles:
+        card:
+        - border-radius: 10px
+        - padding: 10px 4px
+        - background-color: "[[[return entity.attributes.fan_speed==='max'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.attributes.fan_speed==='max'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.attributes.fan_speed==='max'?'white':'var(--primary-text-color)']]]"
+        - font-size: 11px
+        icon:
+        - color: "[[[return entity.attributes.fan_speed==='max'?'white':'var(--state-icon-color)']]]"
+        - width: 22px
+    - type: custom:button-card
+      entity: vacuum.rocky
+      name: Max+
+      icon: mdi:fan-plus
+      tap_action:
+        action: call-service
+        service: vacuum.set_fan_speed
+        service_data:
+          entity_id: vacuum.rocky
+          fan_speed: max_plus
+      styles:
+        card:
+        - border-radius: 10px
+        - padding: 10px 4px
+        - background-color: "[[[return entity.attributes.fan_speed==='max_plus'?'var(--primary-color)':'var(--card-background-color)']]]"
+        - border: "[[[return entity.attributes.fan_speed==='max_plus'?'2px solid var(--primary-color)':'2px solid rgba(var(--rgb-primary-text-color),0.15)']]]"
+        name:
+        - color: "[[[return entity.attributes.fan_speed==='max_plus'?'white':'var(--primary-text-color)']]]"
+        - font-size: 11px
+        icon:
+        - color: "[[[return entity.attributes.fan_speed==='max_plus'?'white':'var(--state-icon-color)']]]"
+        - width: 22px
+  - type: entities
+    title: Mop & Dock
+    show_header_toggle: false
+    entities:
+    - entity: select.rocky_mop_mode
+      name: Mop Mode
+    - entity: select.rocky_mop_intensity
+      name: Mop Intensity
+    - entity: select.rocky_dock_empty_mode
+      name: Auto-Empty Mode
+  - type: entities
+    title: Maintenance
+    show_header_toggle: false
+    entities:
+    - entity: sensor.rocky_main_brush_time_left
+      name: Main Brush (hrs left)
+    - entity: sensor.rocky_side_brush_time_left
+      name: Side Brush (hrs left)
+    - entity: sensor.rocky_filter_time_left
+      name: Filter (hrs left)
+    - entity: sensor.rocky_sensor_time_left
+      name: Sensors (hrs left)
+    - entity: sensor.rocky_total_cleaning_count
+      name: Total Cleans
+    - entity: sensor.rocky_last_clean_end
+      name: Last Clean
+  - type: entities
+    title: Status
+    show_header_toggle: false
+    entities:
+    - entity: sensor.rocky_current_room
+      name: Current Room
+    - entity: sensor.rocky_cleaning_area
+      name: Area (m²)
+    - entity: sensor.rocky_cleaning_progress
+      name: Progress (%)
+    - entity: binary_sensor.rocky_mop_attached
+      name: Mop Attached
+    - entity: binary_sensor.rocky_water_box_attached
+      name: Water Box
+    - entity: binary_sensor.rocky_water_shortage
+      name: Water Low
+    - entity: binary_sensor.rocky_dock_clean_water_box
+      name: Dock Clean Water
+    - entity: binary_sensor.rocky_dock_dirty_water_box
+      name: Dock Dirty Water
 
-      - type: grid
-        cards:
-          - type: heading
-            heading: Scenes
-            heading_style: title
-            icon: mdi:movie-open
-          - type: custom:apple-home-card
-            entity: scene.bright
-            icon: mdi:white-balance-sunny
-          - type: custom:apple-home-card
-            entity: scene.cosy
-            icon: mdi:sofa
-            color: "#ff9f0a"
-          - type: custom:apple-home-card
-            entity: scene.movie_night
-            icon: mdi:movie
-            color: "#bf5af2"
-          - type: custom:apple-home-card
-            entity: scene.night_night
-            icon: mdi:weather-night
-            color: "#5e5ce6"
-          - type: custom:apple-home-card
-            entity: scene.sleep
-            icon: mdi:bed
-            color: "#5e5ce6"
-          - type: custom:apple-home-card
-            entity: script.goodnight
-            name: Goodnight
-            icon: mdi:moon-waning-crescent
-            color: "#5e5ce6"
-          - type: custom:apple-home-card
-            entity: script.walking_the_dogs
-            name: Walk the Dogs
-            icon: mdi:dog-side
-            color: "#30d158"
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Climate
-            heading_style: title
-            icon: mdi:air-conditioner
-          - type: custom:apple-home-card
-            entity: script.ac_cool
-            name: Cool
-            icon: mdi:snowflake
-            color: "#0a84ff"
-          - type: custom:apple-home-card
-            entity: script.ac_auto_mode
-            name: Auto
-            icon: mdi:autorenew
-          - type: custom:apple-home-card
-            entity: script.ac_wind_up
-            name: Wind Up
-            icon: mdi:fan-plus
-          - type: custom:apple-home-card
-            entity: script.ac_wind_down
-            name: Wind Down
-            icon: mdi:fan-minus
-          - type: custom:apple-home-card
-            entity: script.ac_start_sleep_timer
-            name: Sleep Timer
-            icon: mdi:timer-sand
-            color: "#5e5ce6"
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Security
-            heading_style: title
-            icon: mdi:shield-home
-          - type: custom:apple-home-card
-            entity: alarm_control_panel.home_base
-            name: Home Base
-            icon: mdi:shield
-          - type: custom:apple-home-card
-            entity: alarm_control_panel.living_room
-            name: Living Room
-            icon: mdi:cctv
-          - type: custom:apple-home-card
-            entity: alarm_control_panel.backyard
-            name: Backyard
-            icon: mdi:cctv
-          - type: custom:apple-home-card
-            entity: binary_sensor.doorbell_ringing
-            name: Doorbell
-            icon: mdi:bell
-            color: "#0a84ff"
-          - type: custom:apple-home-card
-            entity: binary_sensor.doorbell_person_detected
-            name: At Door
-            icon: mdi:account
-          - type: custom:apple-home-card
-            entity: cover.garagedoor
-            name: Garage Door
-            icon: mdi:garage
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Rooms
-            heading_style: title
-            icon: mdi:floor-plan
-          - type: custom:apple-home-area-card
-            name: Living Room
-            icon: mdi:sofa
-            navigation_path: /dashboard-pretty/rooms
-            entities:
-              - light.living_room_1
-              - light.living_room_lamp
-              - light.canvas_281d
-          - type: custom:apple-home-area-card
-            name: Bedroom
-            icon: mdi:bed
-            navigation_path: /dashboard-pretty/rooms
-            entities:
-              - light.bedroom
-          - type: custom:apple-home-area-card
-            name: Hallway & Stairs
-            icon: mdi:stairs
-            navigation_path: /dashboard-pretty/rooms
-            entities:
-              - light.hallway
-              - light.stairs
-          - type: custom:apple-home-area-card
-            name: Garage
-            icon: mdi:garage
-            navigation_path: /dashboard-pretty/rooms
-            entities:
-              - light.garage
-          - type: custom:apple-home-area-card
-            name: Office
-            icon: mdi:printer-3d
-            navigation_path: /dashboard-pretty/rooms
-            entities:
-              - light.3d_printing_lights
-              - switch.prusa_core_one
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Status
-            heading_style: title
-            icon: mdi:home-analytics
-          - type: custom:apple-home-card
-            entity: person.jack
-            name: Jack
-            icon: mdi:account
-          - type: custom:apple-home-weather-card
-            entity: weather.forecast_home
-            name: Home
-            size: large
-            forecast_days: 7
-            animated: true
-          - type: custom:apple-home-card
-            entity: sensor.raxe300_gateway_download_speed
-            name: Download
-            icon: mdi:download
-            color: "#0a84ff"
-          - type: custom:apple-home-card
-            entity: sensor.jacks_iphone_2_battery_level
-            name: iPhone
-            icon: mdi:cellphone
-            color: "#30d158"
-
-  # ===========================================================================
-  # ROOMS
-  # ===========================================================================
-  - title: Rooms
-    path: rooms
-    type: sections
-    max_columns: 4
-    sections:
-      - type: grid
-        cards:
-          - type: heading
-            heading: Living Room
-            heading_style: title
-            icon: mdi:sofa
-          - type: custom:apple-home-card
-            entity: light.living_room_1
-            name: Ceiling
-          - type: custom:apple-home-card
-            entity: light.living_room_lamp
-            name: Lamp
-          - type: custom:apple-home-card
-            entity: light.canvas_281d
-            name: Nanoleaf
-            color: "#bf5af2"
-          - type: custom:apple-home-card
-            entity: switch.christmas_tree
-            name: Christmas Tree
-            icon: mdi:pine-tree
-            color: "#30d158"
-          - type: custom:apple-home-media-card
-            entity: media_player.arc
-            name: Sonos Arc
-          - type: custom:apple-home-card
-            entity: media_player.living_room_tv
-            name: TV
-            icon: mdi:television
-          - type: custom:apple-home-card
-            entity: media_player.living_room
-            name: Apple TV
-            icon: mdi:apple
-          - type: custom:apple-home-card
-            entity: binary_sensor.living_room_motion_detected
-            name: Motion
-            icon: mdi:motion-sensor
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Bedroom
-            heading_style: title
-            icon: mdi:bed
-          - type: custom:apple-home-card
-            entity: light.bedroom
-            name: Lights
-          - type: custom:apple-home-card
-            entity: scene.bedroom_bright
-            name: Bright
-            icon: mdi:white-balance-sunny
-          - type: custom:apple-home-card
-            entity: scene.bedroom_dim
-            name: Dim
-            icon: mdi:weather-night
-            color: "#5e5ce6"
-          - type: custom:apple-home-media-card
-            entity: media_player.bedroom_home_assistant_voice_0a95d7
-            name: Bedroom Speaker
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Kitchen
-            heading_style: title
-            icon: mdi:fridge
-          - type: custom:apple-home-media-card
-            entity: media_player.kitchen
-            name: Kitchen Sonos
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Bathroom & Dressing
-            heading_style: title
-            icon: mdi:shower
-          - type: custom:apple-home-card
-            entity: light.bathroom
-            name: Bathroom
-          - type: custom:apple-home-card
-            entity: light.dressing_room
-            name: Dressing Room
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Hallway & Stairs
-            heading_style: title
-            icon: mdi:stairs
-          - type: custom:apple-home-card
-            entity: light.hallway
-            name: Hallway
-          - type: custom:apple-home-card
-            entity: binary_sensor.hallway
-            name: Hall Motion
-            icon: mdi:motion-sensor
-          - type: custom:apple-home-card
-            entity: light.stairs
-            name: Stairs
-          - type: custom:apple-home-card
-            entity: binary_sensor.stairs
-            name: Stairs Motion
-            icon: mdi:motion-sensor
-          - type: custom:apple-home-card
-            entity: binary_sensor.sliding_door
-            name: Sliding Door
-            icon: mdi:door-sliding
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Garage
-            heading_style: title
-            icon: mdi:garage
-          - type: custom:apple-home-card
-            entity: light.garage
-            name: Light
-          - type: custom:apple-home-card
-            entity: cover.garagedoor
-            name: Door
-            icon: mdi:garage
-          - type: custom:apple-home-card
-            entity: binary_sensor.garage_door
-            name: Door State
-            icon: mdi:garage-alert
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Office & 3D Printing
-            heading_style: title
-            icon: mdi:printer-3d
-          - type: custom:apple-home-card
-            entity: light.3d_printing_lights
-            name: Lights
-          - type: custom:apple-home-card
-            entity: switch.prusa_core_one
-            name: Printer Power
-            icon: mdi:power
-          - type: custom:apple-home-card
-            entity: sensor.prusa_core_one
-            name: Printer
-            icon: mdi:printer-3d-nozzle
-          - type: custom:apple-home-card
-            entity: sensor.prusa_core_one_progress
-            name: Progress
-            icon: mdi:progress-helper
-            color: "#ff9f0a"
-          - type: custom:apple-home-card
-            entity: binary_sensor.office_door
-            name: Door
-            icon: mdi:door
-          - type: custom:apple-home-graph-card
-            entity: sensor.3d_printing_sensor_temperature
-            name: Temperature
-          - type: custom:apple-home-graph-card
-            entity: sensor.3d_printing_sensor_humidity
-            name: Humidity
-          - type: custom:apple-home-graph-card
-            entity: sensor.3d_printing_sensor_voc_index
-            name: Air VOC
-          - type: custom:apple-home-graph-card
-            entity: sensor.3d_printing_sensor_current_pm2_5
-            name: PM2.5
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Patio
-            heading_style: title
-            icon: mdi:flower
-          - type: custom:apple-home-media-card
-            entity: media_player.patio
-            name: Patio Sonos
-          - type: custom:apple-home-media-card
-            entity: media_player.patio_2
-            name: Patio Beam
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Backyard
-            heading_style: title
-            icon: mdi:tree
-          - type: custom:apple-home-card
-            entity: switch.backyard_light
-            name: Light
-          - type: custom:apple-home-card
-            entity: binary_sensor.backyard_motion_detected
-            name: Motion
-            icon: mdi:motion-sensor
-          - type: custom:apple-home-card
-            entity: binary_sensor.backyard_person_detected
-            name: Person
-            icon: mdi:account
-
-  # ===========================================================================
-  # CAMERAS — native picture tiles (live thumbnails), themed by Apple Home
-  # ===========================================================================
-  - title: Cameras
-    path: cameras
-    type: sections
-    max_columns: 3
-    sections:
-      - type: grid
-        cards:
-          - type: heading
-            heading: Cameras
-            heading_style: title
-            icon: mdi:cctv
-          - type: picture-entity
-            entity: camera.doorbell
-            name: Doorbell
-            camera_view: auto
-          - type: picture-entity
-            entity: camera.living_room
-            name: Living Room
-            camera_view: auto
-          - type: picture-entity
-            entity: camera.backyard
-            name: Backyard
-            camera_view: auto
-          - type: picture-entity
-            entity: camera.prusa_core_one_preview
-            name: 3D Printer
-            camera_view: auto
-
-  # ===========================================================================
-  # HOUSE — vacuum, sensors, network
-  # ===========================================================================
-  - title: House
-    path: house
-    type: sections
-    max_columns: 4
-    sections:
-      - type: grid
-        cards:
-          - type: heading
-            heading: Rocky (Vacuum)
-            heading_style: title
-            icon: mdi:robot-vacuum
-          - type: custom:apple-home-vacuum-card
-            entity: vacuum.rocky
-            name: Rocky
-            icon: mdi:robot-vacuum
-            battery_entity: sensor.rocky_battery
-            status_entity: sensor.rocky_status
-            actions:
-              - entity: button.living_room_rocky_full_cleaning
-                label: Living Room
-                icon: mdi:sofa-outline
-          - type: custom:apple-home-chip
-            entity: sensor.rocky_battery
-            name: Battery
-            icon: mdi:battery
-            color: "#30d158"
-          - type: custom:apple-home-chip
-            entity: sensor.rocky_status
-            name: Status
-            icon: mdi:information
-            color: "#64d2ff"
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Network
-            heading_style: title
-            icon: mdi:wifi
-          - type: custom:apple-home-card
-            entity: sensor.raxe300_gateway_download_speed
-            name: Download
-            icon: mdi:download
-            color: "#0a84ff"
-          - type: custom:apple-home-card
-            entity: sensor.raxe300_gateway_upload_speed
-            name: Upload
-            icon: mdi:upload
-            color: "#bf5af2"
-          - type: custom:apple-home-card
-            entity: binary_sensor.raxe300_gateway_wan_status
-            name: Internet
-            icon: mdi:web
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Sensors
-            heading_style: title
-            icon: mdi:chart-line
-          - type: custom:apple-home-graph-card
-            entity: sensor.timmerflotte_temp_hmd_sen_temperature
-            name: Temperature
-          - type: custom:apple-home-graph-card
-            entity: sensor.timmerflotte_temp_hmd_sen_humidity
-            name: Humidity
-          - type: custom:apple-home-graph-card
-            entity: sensor.timmerflotte_temp_hmd_sen_temperature_2
-            name: Temperature 2
-
-      - type: grid
-        cards:
-          - type: heading
-            heading: Lists
-            heading_style: title
-            icon: mdi:format-list-checks
-          - type: todo-list
-            entity: todo.shopping_list
-
-# ─────────────────────────────────────────────────────────────────────────────
-# UNASSIGNED LIGHTS
-#   You have ~15 lights with UUID names (light.5d34e3af_…, light.027d335e_…)
-#   and no friendly names/areas, so I couldn't place them. Best fix: in HA go to
-#   Settings ▸ Devices, give each a name + area. Until then, drop this card on the
-#   Rooms view to surface every light not already shown (needs auto-entities,
-#   which you already have installed):
-#
-#   - type: custom:auto-entities
-#     card:
-#       type: grid
-#     card_param: cards
-#     filter:
-#       include:
-#         - domain: light
-#           options:
-#             type: custom:apple-home-card
-#       exclude:
-#         - entity_id: light.browser_mod_*
-#         - entity_id: "*_led_ring"
-#         - entity_id: "*_screen"
-# ─────────────────────────────────────────────────────────────────────────────
